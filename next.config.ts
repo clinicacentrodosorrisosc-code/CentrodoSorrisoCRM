@@ -134,6 +134,7 @@ const nextConfig: NextConfig = {
    * they apply to every response regardless of which cache rule
    * matched.
    */
+  serverExternalPackages: ['@whiskeysockets/baileys', 'jimp', 'sharp'],
   async headers() {
     return [
       {
