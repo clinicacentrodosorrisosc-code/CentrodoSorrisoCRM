@@ -385,17 +385,6 @@ function InboxPageInner() {
   }, []);
 
   /**
-   * Automatic 4-second polling interval safety net so new messages
-   * automatically pop up in the UI even if Realtime WebSocket drops.
-   */
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setResyncToken((n) => n + 1);
-    }, 4000);
-    return () => clearInterval(interval);
-  }, []);
-
-  /**
    * Manual refresh trigger for the thread-header refresh button.
    * Bumps the same resyncToken the reconnect / visibility paths use,
    * so it goes through the existing dedupe & refetch plumbing — no

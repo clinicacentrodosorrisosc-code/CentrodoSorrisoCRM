@@ -166,9 +166,33 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
 
     case "audio":
       return (
-        <div>
+        <div className="flex flex-col gap-1.5 min-w-[200px]">
           {message.media_url ? (
-            <audio src={message.media_url} controls className="max-w-60" />
+            <>
+              {/* Primary: native audio player. WhatsApp sends audio as
+                  audio/ogg;codecs=opus. Chrome plays it natively; Safari
+                  needs the codecs hint so we add it as a <source>. */}
+              <audio
+                controls
+                preload="metadata"
+                className="w-full max-w-[280px]"
+                style={{ height: 36 }}
+              >
+                <source src={message.media_url} type="audio/ogg; codecs=opus" />
+                <source src={message.media_url} type="audio/ogg" />
+                <source src={message.media_url} type="audio/mpeg" />
+                <source src={message.media_url} type="audio/mp4" />
+                Your browser does not support the audio element.
+              </audio>
+              {/* Fallback download link for browsers that still can't play */}
+              <a
+                href={message.media_url}
+                download
+                className="text-[10px] text-muted-foreground underline hover:text-foreground"
+              >
+                Baixar nota de voz
+              </a>
+            </>
           ) : (
             <MediaUnavailable label={t("audio")} t={t} />
           )}

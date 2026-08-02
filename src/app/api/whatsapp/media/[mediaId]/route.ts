@@ -78,6 +78,11 @@ export async function GET(
       headers: {
         'Content-Type': contentType || mediaInfo.mimeType || 'application/octet-stream',
         'Cache-Control': 'public, max-age=86400',
+        // Required for the browser <audio> element to seek within voice notes.
+        // Without this, Chrome/Safari refuse to play the audio until the full
+        // file is buffered and seek doesn't work at all.
+        'Accept-Ranges': 'bytes',
+        'Content-Length': buffer.byteLength.toString(),
       },
     })
   } catch (error) {
