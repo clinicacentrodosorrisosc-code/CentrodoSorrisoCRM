@@ -16,6 +16,7 @@ import {
   Users,
   PhoneCall,
   Loader2,
+  Sparkles,
 } from "lucide-react"
 
 import { createClient } from "@/lib/supabase/client"
@@ -43,6 +44,7 @@ import {
 import { AUTOMATION_TEMPLATES, type TemplateSlug } from "@/lib/automations/templates"
 import { triggerMeta, formatRelative } from "@/lib/automations/trigger-meta"
 import { cn } from "@/lib/utils"
+import { AiAutomationGenerator } from "@/components/automations/ai-automation-generator"
 
 const TEMPLATE_ORDER: TemplateSlug[] = [
   "welcome_message",
@@ -66,6 +68,7 @@ export default function AutomationsPage() {
   const [error, setError] = useState<string | null>(null)
   const [pendingDelete, setPendingDelete] = useState<Automation | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [aiModalOpen, setAiModalOpen] = useState(false)
 
   async function load() {
     try {
@@ -167,15 +170,31 @@ export default function AutomationsPage() {
             {t("subtitle")}
           </p>
         </div>
-        <GatedButton
-          canAct={canCreate}
-          gateReason="create automations"
-          onClick={() => router.push("/automations/new")}
-          className="bg-primary text-primary-foreground hover:bg-primary/90"
-        >
-          <Plus className="h-4 w-4" />
-          {t("create")}
-        </GatedButton>
+        <div className="flex items-center gap-2">
+          <GatedButton
+            canAct={canCreate}
+            gateReason="create automations with AI"
+            onClick={() => setAiModalOpen(true)}
+            className="gap-2 text-white"
+            style={{
+              background: "linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(271 91% 65%) 100%)",
+              boxShadow: "0 0 20px hsl(var(--primary)/0.3)",
+            }}
+          >
+            <Sparkles className="h-4 w-4" />
+            Criar com IA
+          </GatedButton>
+          <GatedButton
+            canAct={canCreate}
+            gateReason="create automations"
+            onClick={() => router.push("/automations/new")}
+            className="bg-muted text-foreground hover:bg-muted/80"
+            variant="outline"
+          >
+            <Plus className="h-4 w-4" />
+            {t("create")}
+          </GatedButton>
+        </div>
       </div>
 
       {showTemplates && (
@@ -229,6 +248,12 @@ export default function AutomationsPage() {
           ))}
         </ul>
       )}
+
+      <AiAutomationGenerator
+        open={aiModalOpen}
+        onOpenChange={setAiModalOpen}
+        onCreated={load}
+      />
 
       <Dialog open={!!pendingDelete} onOpenChange={(v) => !v && setPendingDelete(null)}>
         <DialogContent>
