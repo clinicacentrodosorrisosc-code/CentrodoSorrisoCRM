@@ -595,6 +595,55 @@ export function WhatsAppConfig() {
     }
   }
 
+  function handleFacebookConnect() {
+    if (typeof window === 'undefined') return;
+
+    const fb = (window as any).FB;
+
+    const launchLogin = () => {
+      const currentFb = (window as any).FB;
+      if (currentFb) {
+        currentFb.login(
+          (response: any) => {
+            if (response.authResponse?.accessToken) {
+              setAccessToken(response.authResponse.accessToken);
+              setTokenEdited(true);
+              toast.success('Token do Facebook obtido com sucesso! Salve a configuração.');
+            } else {
+              toast.info('Autenticação com Facebook finalizada.');
+            }
+          },
+          {
+            scope: 'whatsapp_business_management,whatsapp_business_messaging',
+            extras: { feature: 'whatsapp_embedded_signup' },
+          }
+        );
+      } else {
+        toast.info('Serviço de login do Facebook inicializando... Tente novamente em um instante.');
+      }
+    };
+
+    if (!fb) {
+      const script = document.createElement('script');
+      script.id = 'facebook-jssdk';
+      script.src = 'https://connect.facebook.net/pt_BR/sdk.js';
+      script.async = true;
+      script.defer = true;
+      script.crossOrigin = 'anonymous';
+      script.onload = () => {
+        (window as any).FB?.init({
+          cookie: true,
+          xfbml: true,
+          version: 'v21.0',
+        });
+        launchLogin();
+      };
+      document.body.appendChild(script);
+    } else {
+      launchLogin();
+    }
+  }
+
   function handleCopyWebhookUrl() {
     navigator.clipboard.writeText(webhookUrl);
     toast.success('Webhook URL copied to clipboard');
@@ -1053,6 +1102,28 @@ export function WhatsAppConfig() {
             )}
           </Alert>
         )}
+
+        {/* Facebook Embedded Signup Option */}
+        <Card className="border-blue-500/30 bg-blue-500/5">
+          <CardContent className="p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <h4 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <span className="flex size-6 items-center justify-center rounded-full bg-blue-600 text-white font-bold text-xs">f</span>
+                Conectar com Facebook (Embedded Signup)
+              </h4>
+              <p className="text-xs text-muted-foreground">
+                Vincule sua conta de negócios do WhatsApp automaticamente pelo login do Facebook sem precisar digitar tokens manualmente.
+              </p>
+            </div>
+            <Button
+              type="button"
+              onClick={handleFacebookConnect}
+              className="bg-blue-600 hover:bg-blue-700 text-white shrink-0 text-xs gap-2 font-medium"
+            >
+              Conectar com o Facebook
+            </Button>
+          </CardContent>
+        </Card>
 
         {/* API Credentials */}
         <Card>
