@@ -595,52 +595,48 @@ export function WhatsAppConfig() {
     }
   }
 
+  const [metaAppId, setMetaAppId] = useState('');
+
+  // Extract access token if redirected back from Facebook OAuth popup/redirect
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.location.hash) {
+      const params = new URLSearchParams(window.location.hash.replace('#', '?'));
+      const token = params.get('access_token');
+      if (token) {
+        setAccessToken(token);
+        setTokenEdited(true);
+        toast.success('Token do Facebook importado com sucesso! Clique em Salvar Configuração.');
+        window.history.replaceState(null, '', window.location.pathname);
+      }
+    }
+  }, []);
+
   function handleFacebookConnect() {
     if (typeof window === 'undefined') return;
 
-    const fb = (window as any).FB;
+    const appId = metaAppId.trim();
 
-    const launchLogin = () => {
-      const currentFb = (window as any).FB;
-      if (currentFb) {
-        currentFb.login(
-          (response: any) => {
-            if (response.authResponse?.accessToken) {
-              setAccessToken(response.authResponse.accessToken);
-              setTokenEdited(true);
-              toast.success('Token do Facebook obtido com sucesso! Salve a configuração.');
-            } else {
-              toast.info('Autenticação com Facebook finalizada.');
-            }
-          },
-          {
-            scope: 'whatsapp_business_management,whatsapp_business_messaging',
-            extras: { feature: 'whatsapp_embedded_signup' },
-          }
-        );
-      } else {
-        toast.info('Serviço de login do Facebook inicializando... Tente novamente em um instante.');
-      }
-    };
+    if (!appId) {
+      toast.error('Por favor, insira o ID do Aplicativo Meta (App ID) no campo abaixo.');
+      return;
+    }
 
-    if (!fb) {
-      const script = document.createElement('script');
-      script.id = 'facebook-jssdk';
-      script.src = 'https://connect.facebook.net/pt_BR/sdk.js';
-      script.async = true;
-      script.defer = true;
-      script.crossOrigin = 'anonymous';
-      script.onload = () => {
-        (window as any).FB?.init({
-          cookie: true,
-          xfbml: true,
-          version: 'v21.0',
-        });
-        launchLogin();
-      };
-      document.body.appendChild(script);
-    } else {
-      launchLogin();
+    const redirectUri = encodeURIComponent(window.location.href.split('#')[0]);
+    const oauthUrl = `https://www.facebook.com/v21.0/dialog/oauth?client_id=${appId}&redirect_uri=${redirectUri}&scope=whatsapp_business_management,whatsapp_business_messaging&response_type=token`;
+
+    const width = 600;
+    const height = 700;
+    const left = window.screen.width / 2 - width / 2;
+    const top = window.screen.height / 2 - height / 2;
+
+    const popup = window.open(
+      oauthUrl,
+      'FacebookLoginPopup',
+      `width=${width},height=${height},top=${top},left=${left},scrollbars=yes`
+    );
+
+    if (!popup) {
+      window.location.href = oauthUrl;
     }
   }
 
@@ -1105,23 +1101,33 @@ export function WhatsAppConfig() {
 
         {/* Facebook Embedded Signup Option */}
         <Card className="border-blue-500/30 bg-blue-500/5">
-          <CardContent className="p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div className="space-y-1">
-              <h4 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                <span className="flex size-6 items-center justify-center rounded-full bg-blue-600 text-white font-bold text-xs">f</span>
-                Conectar com Facebook (Embedded Signup)
-              </h4>
-              <p className="text-xs text-muted-foreground">
-                Vincule sua conta de negócios do WhatsApp automaticamente pelo login do Facebook sem precisar digitar tokens manualmente.
-              </p>
+          <CardHeader className="pb-3">
+            <div className="flex items-center gap-2">
+              <span className="flex size-6 items-center justify-center rounded-full bg-blue-600 text-white font-bold text-xs">f</span>
+              <CardTitle className="text-sm font-semibold text-foreground">
+                Conectar via Login do Facebook (Embedded Signup)
+              </CardTitle>
             </div>
-            <Button
-              type="button"
-              onClick={handleFacebookConnect}
-              className="bg-blue-600 hover:bg-blue-700 text-white shrink-0 text-xs gap-2 font-medium"
-            >
-              Conectar com o Facebook
-            </Button>
+            <CardDescription className="text-xs text-muted-foreground">
+              Cole o ID do seu Aplicativo Meta (App ID) abaixo e clique para autenticar via janela pop-up oficial do Facebook.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3 pt-0">
+            <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+              <Input
+                placeholder="ID do Aplicativo Meta (ex: 123456789012345)"
+                value={metaAppId}
+                onChange={(e) => setMetaAppId(e.target.value)}
+                className="bg-background text-xs h-9 border-blue-500/30"
+              />
+              <Button
+                type="button"
+                onClick={handleFacebookConnect}
+                className="bg-blue-600 hover:bg-blue-700 text-white text-xs gap-2 font-medium h-9"
+              >
+                Conectar com o Facebook
+              </Button>
+            </div>
           </CardContent>
         </Card>
 
