@@ -183,6 +183,10 @@ export function MessageComposer({
   const recorderRef = useRef<import("opus-recorder").default | null>(null);
   const cancelledRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Local object URL for the audio preview — created from the raw bytes
+  // immediately after recording so the user can play it back without waiting
+  // for the Supabase upload or depending on bucket public permissions.
+  const [localAudioUrl, setLocalAudioUrl] = useState<string | null>(null);
 
   // Viewers (read-only role) can browse the inbox but never send.
   // For solo users this is always true — single-owner accounts pass
@@ -426,14 +430,25 @@ export function MessageComposer({
     async (bytes: Uint8Array) => {
       // Uint8Array is a valid BlobPart at runtime; the cast sidesteps the
       // lib.dom ArrayBufferLike-vs-ArrayBuffer generic mismatch.
+      // Use the full MIME type with codec hint so Safari can play it back.
       const file = new File([bytes as unknown as BlobPart], `voice-${Date.now()}.ogg`, {
-        type: "audio/ogg",
+        type: "audio/ogg; codecs=opus",
       });
       if (file.size === 0) return; // cancelled / empty take
       if (file.size > MEDIA_MAX_BYTES_BY_KIND.audio) {
         toast.error("Recording is too long (over 16 MB).");
         return;
       }
+
+      // Create a local object URL immediately so the user can listen to the
+      // recording right away — before (or instead of) the Supabase upload.
+      const objUrl = URL.createObjectURL(file);
+      // Revoke previous object URL to avoid memory leaks.
+      setLocalAudioUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return objUrl;
+      });
+
       setBusy(true);
       try {
         const { publicUrl, path } = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
@@ -527,6 +542,10 @@ export function MessageComposer({
   const discardDraft = useCallback(() => {
     removeStaged(draft?.path);
     setDraft(null);
+    setLocalAudioUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
   }, [draft?.path, removeStaged]);
 
   const setCaption = useCallback((caption: string) => {
@@ -596,10 +615,11 @@ export function MessageComposer({
       />
 
       {draft ? (
-        <MediaDraftPreview
+              <MediaDraftPreview
           draft={draft}
           busy={busy}
           readOnly={readOnly}
+          localAudioUrl={localAudioUrl}
           onCaptionChange={setCaption}
           onDiscard={discardDraft}
           onSend={sendDraft}
@@ -825,6 +845,7 @@ function MediaDraftPreview({
   draft,
   busy,
   readOnly,
+  localAudioUrl,
   onCaptionChange,
   onDiscard,
   onSend,
@@ -833,6 +854,8 @@ function MediaDraftPreview({
   draft: MediaDraft;
   busy: boolean;
   readOnly: boolean;
+  /** Local object URL for the audio preview — plays back immediately after recording. */
+  localAudioUrl?: string | null;
   onCaptionChange: (caption: string) => void;
   onDiscard: () => void;
   onSend: () => void;
@@ -854,7 +877,15 @@ function MediaDraftPreview({
             <video src={draft.mediaUrl} controls className="max-h-40 rounded-lg" />
           )}
           {draft.kind === "audio" && (
-            <audio src={draft.mediaUrl} controls className="w-full" />
+            <audio
+              src={localAudioUrl ?? draft.mediaUrl}
+              controls
+              preload="metadata"
+              className="w-full"
+            >
+              <source src={localAudioUrl ?? draft.mediaUrl} type="audio/ogg; codecs=opus" />
+              <source src={localAudioUrl ?? draft.mediaUrl} type="audio/ogg" />
+            </audio>
           )}
           {draft.kind === "document" && (
             <div className="flex items-center gap-2 text-sm text-foreground">
