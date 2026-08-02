@@ -219,7 +219,7 @@ export async function POST(request: Request) {
     if (claimedError) {
       console.error('Error checking phone_number_id ownership:', claimedError)
       return NextResponse.json(
-        { error: 'Failed to validate configuration' },
+        { error: `Falha ao validar configuração no banco de dados: ${claimedError.message}` },
         { status: 500 }
       )
     }
