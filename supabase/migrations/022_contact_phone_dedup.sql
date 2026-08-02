@@ -111,7 +111,10 @@ ALTER FUNCTION public.merge_duplicate_contacts() OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.merge_duplicate_contacts() FROM PUBLIC;
 
 -- Collapse whatever duplicates exist right now.
-SELECT public.merge_duplicate_contacts();
+DO $$
+BEGIN
+  PERFORM public.merge_duplicate_contacts();
+END $$;
 
 -- 3) Authoritative guarantee. Partial index defends against any
 --    empty normalized value (phone is NOT NULL, but belt-and-braces).

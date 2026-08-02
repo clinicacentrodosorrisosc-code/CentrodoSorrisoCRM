@@ -116,7 +116,10 @@ ALTER FUNCTION public.merge_duplicate_conversations() OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.merge_duplicate_conversations() FROM PUBLIC;
 
 -- Collapse whatever duplicates exist right now.
-SELECT public.merge_duplicate_conversations();
+DO $$
+BEGIN
+  PERFORM public.merge_duplicate_conversations();
+END $$;
 
 -- 2) Authoritative guarantee: one conversation per (account, contact).
 --    Every write path (inbound webhook, public-API resolver) now has a
