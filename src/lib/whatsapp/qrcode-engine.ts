@@ -58,6 +58,22 @@ export async function startQrCodeSession(
   const instanceId = `cs_acc_${accountId.replace(/-/g, '').slice(0, 16)}`
   const now = new Date().toISOString()
 
+  // Ensure whatsapp_config row exists for accountId
+  const { data: existingConfig } = await db
+    .from('whatsapp_config')
+    .select('id')
+    .eq('account_id', accountId)
+    .maybeSingle()
+
+  if (!existingConfig) {
+    await db.from('whatsapp_config').insert({
+      account_id: accountId,
+      connection_type: 'qrcode',
+      qrcode_status: 'disconnected',
+      qrcode_instance_id: instanceId,
+    })
+  }
+
   // 1. Check if external API gateway (Evolution API) is configured
   if (opts?.apiUrl && opts.apiUrl.trim()) {
     try {
