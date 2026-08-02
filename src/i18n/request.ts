@@ -1,15 +1,21 @@
 import { getRequestConfig } from 'next-intl/server';
+import { cookies } from 'next/headers';
 
 export default getRequestConfig(async () => {
-  // Read the locale from the environment, defaulting to 'en'
-  const locale = process.env.NEXT_PUBLIC_APP_LOCALE || 'en';
+  const cookieStore = await cookies();
+  const cookieLocale = cookieStore.get('NEXT_LOCALE')?.value;
+  const envLocale = process.env.NEXT_PUBLIC_APP_LOCALE;
+
+  let locale = cookieLocale || envLocale || 'pt';
+  if (!['pt', 'en', 'ko'].includes(locale)) {
+    locale = 'pt';
+  }
 
   let messages;
   try {
     messages = (await import(`../../messages/${locale}.json`)).default;
   } catch (error) {
-    // Fallback to English if the dictionary for the requested locale doesn't exist yet
-    messages = (await import(`../../messages/en.json`)).default;
+    messages = (await import(`../../messages/pt.json`)).default;
   }
 
   return {
