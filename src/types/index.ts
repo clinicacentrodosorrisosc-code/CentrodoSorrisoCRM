@@ -285,6 +285,17 @@ export interface WhatsAppConfig {
   subscribed_apps_at?: string;
   /** Last error from /register; cleared on success. */
   last_registration_error?: string;
+  /** Mode of connection: Meta Cloud API or QR Code (Baileys / Evolution / Web) */
+  connection_type?: 'cloud_api' | 'qrcode';
+  qrcode_status?: 'disconnected' | 'connecting' | 'qrcode_ready' | 'connected';
+  qrcode_raw?: string;
+  qrcode_url?: string;
+  qrcode_instance_id?: string;
+  qrcode_api_url?: string;
+  qrcode_api_key?: string;
+  connected_phone?: string;
+  connected_name?: string;
+  connected_avatar?: string;
 }
 
 // Raw Meta status enum. We persist this verbatim from Meta (sync + webhook)

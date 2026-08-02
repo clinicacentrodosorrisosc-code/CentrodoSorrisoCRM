@@ -29,6 +29,7 @@ import {
   sendInteractiveList,
   type MediaKind,
 } from '@/lib/whatsapp/meta-api';
+import { sendQrCodeMessage } from '@/lib/whatsapp/qrcode-engine';
 import {
   validateInteractivePayload,
   interactivePayloadPreviewText,
@@ -262,22 +263,34 @@ export async function sendMessageToConversation(
     );
   }
 
-  const accessToken = decrypt(config.access_token);
+  const isQrCodeMode = config.connection_type === 'qrcode';
+  let accessToken = '';
 
-  // Self-heal legacy CBC ciphertexts. Fire-and-forget; idempotent.
-  if (isLegacyFormat(config.access_token)) {
-    void db
-      .from('whatsapp_config')
-      .update({ access_token: encrypt(accessToken) })
-      .eq('id', config.id)
-      .then(({ error }: { error: { message: string } | null }) => {
-        if (error) {
-          console.warn(
-            '[send-message] access_token GCM upgrade failed:',
-            error.message
-          );
-        }
-      });
+  if (!isQrCodeMode) {
+    if (!config.access_token) {
+      throw new SendMessageError(
+        'whatsapp_not_configured',
+        'WhatsApp access token is missing. Please set up your WhatsApp integration.',
+        400
+      );
+    }
+    accessToken = decrypt(config.access_token);
+
+    // Self-heal legacy CBC ciphertexts. Fire-and-forget; idempotent.
+    if (isLegacyFormat(config.access_token)) {
+      void db
+        .from('whatsapp_config')
+        .update({ access_token: encrypt(accessToken) })
+        .eq('id', config.id)
+        .then(({ error }: { error: { message: string } | null }) => {
+          if (error) {
+            console.warn(
+              '[send-message] access_token GCM upgrade failed:',
+              error.message
+            );
+          }
+        });
+    }
   }
 
   // Resolve the reply target to its Meta message_id. The parent must
@@ -330,6 +343,19 @@ export async function sendMessageToConversation(
   }
 
   const attempt = async (phone: string): Promise<string> => {
+    if (isQrCodeMode) {
+      const qrRes = await sendQrCodeMessage(config, {
+        to: phone,
+        type: messageType as any,
+        text: contentText || undefined,
+        mediaUrl: mediaUrl || undefined,
+        filename: filename || undefined,
+        caption: contentText || undefined,
+        templateName: templateName || undefined,
+      });
+      return qrRes.messageId;
+    }
+
     if (messageType === 'template') {
       const result = await sendTemplateMessage({
         phoneNumberId: config.phone_number_id,

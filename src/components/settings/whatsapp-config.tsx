@@ -13,8 +13,19 @@ import {
   Zap,
   AlertTriangle,
   RotateCcw,
+  QrCode,
+  Smartphone,
+  RefreshCw,
+  Send,
+  Check,
+  LogOut,
+  MessageSquare,
+  ShieldCheck,
+  Wifi,
+  WifiOff,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
+import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/use-auth';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
@@ -94,15 +105,174 @@ export function WhatsAppConfig() {
       ? `${window.location.origin}/api/whatsapp/webhook`
       : '';
 
+  // Mode selection: 'qrcode' | 'cloud_api'
+  const [connectionType, setConnectionType] = useState<'qrcode' | 'cloud_api'>('qrcode');
+
+  // QR Code states
+  const [qrStatus, setQrStatus] = useState<'disconnected' | 'connecting' | 'qrcode_ready' | 'connected'>('disconnected');
+  const [qrUrl, setQrUrl] = useState<string | null>(null);
+  const [connectedPhone, setConnectedPhone] = useState<string | null>(null);
+  const [connectedName, setConnectedName] = useState<string | null>(null);
+  const [generatingQr, setGeneratingQr] = useState(false);
+  const [disconnectingQr, setDisconnectingQr] = useState(false);
+
+  // Test message form states
+  const [testPhone, setTestPhone] = useState('');
+  const [sendingTest, setSendingTest] = useState(false);
+
+  // Pair confirmation state
+  const [pairPhone, setPairPhone] = useState('');
+  const [pairName, setPairName] = useState('');
+  const [confirmingPair, setConfirmingPair] = useState(false);
+
+  // Gateway URL & Key
+  const [qrApiUrl, setQrApiUrl] = useState('');
+  const [qrApiKey, setQrApiKey] = useState('');
+
+  // Auto-poll QR status every 3 seconds when waiting for QR scan
+  useEffect(() => {
+    if (connectionType !== 'qrcode' || qrStatus !== 'qrcode_ready') return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch('/api/whatsapp/qrcode/status');
+        const data = await res.json();
+        if (data.session) {
+          if (data.session.status === 'connected') {
+            setQrStatus('connected');
+            setConnectedPhone(data.session.connected_phone ?? null);
+            setConnectedName(data.session.connected_name ?? null);
+            setQrUrl(null);
+            toast.success('WhatsApp conectado com sucesso via QR Code!');
+          } else if (data.session.qrcode_url && data.session.qrcode_url !== qrUrl) {
+            setQrUrl(data.session.qrcode_url);
+          }
+        }
+      } catch (err) {
+        console.error('QR status poll error:', err);
+      }
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [connectionType, qrStatus, qrUrl]);
+
+  async function handleStartQrSession() {
+    setGeneratingQr(true);
+    try {
+      const res = await fetch('/api/whatsapp/qrcode/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          api_url: qrApiUrl || undefined,
+          api_key: qrApiKey || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? 'Falha ao gerar QR Code');
+        return;
+      }
+      if (data.session) {
+        setQrStatus(data.session.status);
+        setQrUrl(data.session.qrcode_url ?? null);
+        toast.success('QR Code gerado com sucesso! Escaneie pelo celular.');
+      }
+    } catch (err) {
+      console.error('startQrSession error:', err);
+      toast.error('Erro ao conectar ao servidor de QR Code');
+    } finally {
+      setGeneratingQr(false);
+    }
+  }
+
+  async function handleConfirmPairing() {
+    if (!pairPhone.trim()) {
+      toast.error('Informe o número do celular conectado');
+      return;
+    }
+    setConfirmingPair(true);
+    try {
+      const res = await fetch('/api/whatsapp/qrcode/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: pairPhone.trim(),
+          name: pairName.trim() || 'WhatsApp Business',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? 'Falha ao confirmar conexão');
+        return;
+      }
+      setQrStatus('connected');
+      setConnectedPhone(data.session.connected_phone);
+      setConnectedName(data.session.connected_name);
+      setQrUrl(null);
+      toast.success('WhatsApp confirmado como conectado!');
+    } catch (err) {
+      console.error('confirmPairing error:', err);
+      toast.error('Erro ao confirmar número');
+    } finally {
+      setConfirmingPair(false);
+    }
+  }
+
+  async function handleDisconnectQr() {
+    if (!confirm('Deseja realmente desconectar esta sessão do WhatsApp?')) return;
+    setDisconnectingQr(true);
+    try {
+      const res = await fetch('/api/whatsapp/qrcode/disconnect', { method: 'POST' });
+      if (!res.ok) {
+        const data = await res.json();
+        toast.error(data.error ?? 'Falha ao desconectar');
+        return;
+      }
+      setQrStatus('disconnected');
+      setQrUrl(null);
+      setConnectedPhone(null);
+      setConnectedName(null);
+      toast.success('Sessão do WhatsApp desconectada.');
+    } catch (err) {
+      console.error('disconnectQr error:', err);
+      toast.error('Erro ao desconectar');
+    } finally {
+      setDisconnectingQr(false);
+    }
+  }
+
+  async function handleSendTestMessage() {
+    if (!testPhone.trim()) {
+      toast.error('Digite um número para o teste');
+      return;
+    }
+    setSendingTest(true);
+    try {
+      const res = await fetch('/api/whatsapp/qrcode/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: testPhone.trim(),
+          text: 'Olá! Mensagem de teste enviada via conexão QR Code do Centro do Sorriso CRM. 📱✨',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? 'Falha ao enviar mensagem de teste');
+        return;
+      }
+      toast.success(`Mensagem de teste enviada para ${data.recipient}! Check no WhatsApp.`);
+    } catch (err) {
+      console.error('sendTestMessage error:', err);
+      toast.error('Erro ao enviar teste');
+    } finally {
+      setSendingTest(false);
+    }
+  }
+
   const fetchConfig = useCallback(async (acctId: string) => {
     setLoading(true);
     try {
-      // Load form values from Supabase (shows what's in DB).
-      // Switched from `user_id` (which would only match the row's
-      // original author) to `account_id` so every member of the
-      // account sees the same saved configuration. UNIQUE(account_id)
-      // on the table guarantees the .maybeSingle() return type
-      // remains accurate.
       const { data, error } = await supabase
         .from('whatsapp_config')
         .select('*')
@@ -121,6 +291,29 @@ export function WhatsAppConfig() {
         setVerifyToken('');
         setPin('');
         setTokenEdited(false);
+
+        // QR Code settings hydration
+        if (data.connection_type) {
+          setConnectionType(data.connection_type);
+        }
+        if (data.qrcode_status) {
+          setQrStatus(data.qrcode_status);
+        }
+        if (data.qrcode_url) {
+          setQrUrl(data.qrcode_url);
+        }
+        if (data.connected_phone) {
+          setConnectedPhone(data.connected_phone);
+        }
+        if (data.connected_name) {
+          setConnectedName(data.connected_name);
+        }
+        if (data.qrcode_api_url) {
+          setQrApiUrl(data.qrcode_api_url);
+        }
+        if (data.qrcode_api_key) {
+          setQrApiKey(data.qrcode_api_key);
+        }
       } else {
         setConfig(null);
         setPhoneNumberId('');
@@ -396,6 +589,235 @@ export function WhatsAppConfig() {
       <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
       {/* Main config form */}
       <div className="space-y-6">
+
+        {/* Connection Type Switcher */}
+        <div className="flex items-center gap-2 p-1.5 rounded-xl bg-card border border-border shadow-sm">
+          <button
+            type="button"
+            onClick={() => setConnectionType('qrcode')}
+            className={cn(
+              "flex flex-1 items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all",
+              connectionType === 'qrcode'
+                ? "bg-primary text-primary-foreground shadow-md"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+            )}
+          >
+            <QrCode className="size-4" />
+            Conectar por QR Code (WhatsApp Web)
+          </button>
+          <button
+            type="button"
+            onClick={() => setConnectionType('cloud_api')}
+            className={cn(
+              "flex flex-1 items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all",
+              connectionType === 'cloud_api'
+                ? "bg-primary text-primary-foreground shadow-md"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+            )}
+          >
+            <Zap className="size-4" />
+            API Oficial da Meta (Cloud API)
+          </button>
+        </div>
+
+        {/* QR Code Section */}
+        {connectionType === 'qrcode' && (
+          <div className="space-y-6">
+            {/* Connected Banner */}
+            {qrStatus === 'connected' ? (
+              <Card className="border-emerald-500/30 bg-emerald-500/5 overflow-hidden">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="flex size-12 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400">
+                        <Smartphone className="size-6" />
+                      </div>
+                      <div>
+                        <CardTitle className="text-base font-bold text-foreground flex items-center gap-2">
+                          {connectedName || 'WhatsApp Conectado'}
+                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs font-semibold text-emerald-400">
+                            <CheckCircle2 className="size-3" /> Conectado
+                          </span>
+                        </CardTitle>
+                        <CardDescription className="text-sm text-muted-foreground">
+                          {connectedPhone || 'Número ativado'} · Conexão QR Code Ativa
+                        </CardDescription>
+                      </div>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleDisconnectQr}
+                      disabled={disconnectingQr}
+                      className="border-red-500/30 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                    >
+                      {disconnectingQr ? <Loader2 className="size-4 animate-spin" /> : <LogOut className="size-4" />}
+                      Desconectar
+                    </Button>
+                  </div>
+                </CardHeader>
+
+                <CardContent className="space-y-4 pt-2 border-t border-emerald-500/20">
+                  {/* Test Message Form */}
+                  <div className="space-y-3">
+                    <h4 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                      <Send className="size-4 text-emerald-400" />
+                      Enviar Mensagem de Teste via QR Code
+                    </h4>
+                    <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                      <Input
+                        placeholder="Número de destino com DDD (ex: +5511999999999)"
+                        value={testPhone}
+                        onChange={(e) => setTestPhone(e.target.value)}
+                        className="bg-background/60 text-sm"
+                      />
+                      <Button
+                        onClick={handleSendTestMessage}
+                        disabled={sendingTest || !testPhone.trim()}
+                        className="bg-emerald-600 text-white hover:bg-emerald-700 gap-2"
+                      >
+                        {sendingTest ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+                        Enviar Teste
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card className="border-border bg-card">
+                <CardHeader>
+                  <div className="flex items-center gap-3">
+                    <div className="flex size-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                      <QrCode className="size-5" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-base font-bold text-foreground">
+                        Conectar WhatsApp por QR Code
+                      </CardTitle>
+                      <CardDescription className="text-sm text-muted-foreground">
+                        Escaneie o código QR com seu aplicativo WhatsApp no celular (pessoal ou Business)
+                      </CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+
+                <CardContent className="space-y-6">
+                  {/* QR Code Display Container */}
+                  {qrStatus === 'qrcode_ready' && qrUrl ? (
+                    <div className="flex flex-col items-center justify-center gap-4 py-4 rounded-xl border border-dashed border-primary/40 bg-card/60 p-6">
+                      <div className="relative group">
+                        {/* Scanner Box Graphic */}
+                        <div className="relative rounded-2xl border-2 border-primary/50 p-3 bg-white shadow-2xl shadow-primary/20 overflow-hidden">
+                          <img
+                            src={qrUrl}
+                            alt="QR Code WhatsApp"
+                            className="size-64 object-contain rounded-lg"
+                          />
+                          {/* Laser Scan Animation overlay */}
+                          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-transparent via-primary to-transparent animate-bounce opacity-80" />
+                        </div>
+                      </div>
+
+                      <div className="text-center space-y-1">
+                        <p className="text-sm font-semibold text-foreground flex items-center justify-center gap-2">
+                          <Loader2 className="size-4 animate-spin text-primary" />
+                          Aguardando leitura do QR Code...
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          O status será atualizado automaticamente assim que você escanear.
+                        </p>
+                      </div>
+
+                      {/* Instructions */}
+                      <div className="w-full max-w-md rounded-lg border border-border bg-muted/30 p-4 space-y-2 text-xs text-muted-foreground">
+                        <p className="font-semibold text-foreground text-sm mb-1">Como escanear no seu celular:</p>
+                        <ol className="list-decimal list-inside space-y-1.5 leading-relaxed">
+                          <li>Abra o <strong>WhatsApp</strong> no seu celular</li>
+                          <li>Toque no ícone de <strong>Mais Opções (⋮)</strong> no Android ou <strong>Configurações (⚙️)</strong> no iPhone</li>
+                          <li>Toque em <strong>Aparelhos Conectados</strong> e depois em <strong>Conectar um Aparelho</strong></li>
+                          <li>Aponte a câmera para este QR Code</li>
+                        </ol>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2 justify-center pt-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleStartQrSession}
+                          disabled={generatingQr}
+                          className="gap-2"
+                        >
+                          <RefreshCw className={cn("size-3.5", generatingQr && "animate-spin")} />
+                          Atualizar QR Code
+                        </Button>
+                      </div>
+
+                      {/* Pairing fallback input */}
+                      <div className="w-full max-w-md pt-4 border-t border-border space-y-2">
+                        <p className="text-xs font-semibold text-foreground">
+                          Já escaneou? Confirme o número conectado abaixo:
+                        </p>
+                        <div className="flex gap-2">
+                          <Input
+                            placeholder="Número do WhatsApp (ex: +5511999999999)"
+                            value={pairPhone}
+                            onChange={(e) => setPairPhone(e.target.value)}
+                            className="text-xs h-8 bg-background"
+                          />
+                          <Button
+                            size="sm"
+                            onClick={handleConfirmPairing}
+                            disabled={confirmingPair || !pairPhone.trim()}
+                            className="h-8 text-xs bg-primary text-primary-foreground gap-1"
+                          >
+                            {confirmingPair ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+                            Confirmar
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center gap-4 py-8 rounded-xl border border-dashed border-border bg-muted/10 p-6 text-center">
+                      <div className="flex size-16 items-center justify-center rounded-2xl bg-primary/10 text-primary shadow-inner">
+                        <QrCode className="size-8 animate-pulse" />
+                      </div>
+                      <div className="space-y-1 max-w-sm">
+                        <h4 className="text-sm font-semibold text-foreground">
+                          Gerar código QR de conexão
+                        </h4>
+                        <p className="text-xs text-muted-foreground">
+                          Clique no botão abaixo para criar uma sessão QR Code. O código aparecerá instantaneamente para você escanear.
+                        </p>
+                      </div>
+                      <Button
+                        onClick={handleStartQrSession}
+                        disabled={generatingQr}
+                        size="lg"
+                        className="bg-primary text-primary-foreground hover:bg-primary/90 gap-2 font-semibold shadow-lg shadow-primary/20"
+                      >
+                        {generatingQr ? (
+                          <>
+                            <Loader2 className="size-5 animate-spin" />
+                            Gerando QR Code...
+                          </>
+                        ) : (
+                          <>
+                            <QrCode className="size-5" />
+                            Gerar QR Code para Escanear
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        )}
+
+        {/* Cloud API section (only when connectionType === 'cloud_api') */}
+        {connectionType === 'cloud_api' && (
+          <div className="space-y-6">
         {/* Corrupted-token reset banner */}
         {showResetBanner && (
           <Alert className="bg-amber-950/40 border-amber-600/40">
@@ -739,6 +1161,8 @@ export function WhatsAppConfig() {
           )}
         </div>
       </div>
+    )}
+  </div>
 
       {/* Setup Instructions Sidebar */}
       <div>
