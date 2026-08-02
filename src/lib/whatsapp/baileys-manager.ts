@@ -8,6 +8,7 @@ import makeWASocket, {
 import QRCode from 'qrcode'
 import path from 'path'
 import fs from 'fs'
+import os from 'os'
 import { supabaseAdmin } from '@/lib/automations/admin-client'
 import { generateQrDataUrl } from './qrcode-engine'
 
@@ -15,7 +16,8 @@ import { generateQrDataUrl } from './qrcode-engine'
 const activeSockets = new Map<string, WASocket>()
 
 function getSessionDir(accountId: string): string {
-  const dir = path.join(process.cwd(), '.next', 'whatsapp_sessions', accountId)
+  const baseDir = os.tmpdir()
+  const dir = path.join(baseDir, 'whatsapp_sessions', accountId)
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true })
   }
