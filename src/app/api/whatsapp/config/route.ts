@@ -317,13 +317,17 @@ export async function POST(request: Request) {
           })
           registeredAt = new Date().toISOString()
         } catch (err) {
-          registrationError =
-            err instanceof Error ? err.message : 'Unknown Meta API error'
-          console.error('Phone number /register failed:', registrationError)
-          // We deliberately fall through and still save the row so the
-          // user can retry without re-entering everything. The UI
-          // surfaces `last_registration_error` so they see WHY it's
-          // not actually live yet.
+          const msg = err instanceof Error ? err.message : String(err)
+          if (
+            msg.includes('Register endpoint is not available for SMB businesses') ||
+            msg.includes('2494010')
+          ) {
+            registeredAt = new Date().toISOString()
+            registrationError = null
+          } else {
+            registrationError = msg
+            console.error('Phone number /register failed:', registrationError)
+          }
         }
       }
     }
