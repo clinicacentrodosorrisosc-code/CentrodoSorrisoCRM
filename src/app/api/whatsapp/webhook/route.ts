@@ -25,10 +25,9 @@ export const maxDuration = 60
 let _adminClient: any = null
 function supabaseAdmin() {
   if (!_adminClient) {
-    _adminClient = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    )
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://yzitycpnaefywkvrsluz.supabase.co'
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl6aXR5Y3BuYWVmeXdrdnJzbHV6Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NTYxNzc2NCwiZXhwIjoyMTAxMTkzNzY4fQ.UNpBRd_ASqrp58uzxaH8s2g6eTMPAXuk82cmzzLEXHs'
+    _adminClient = createClient(url, serviceKey)
   }
   return _adminClient
 }
