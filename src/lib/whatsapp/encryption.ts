@@ -26,7 +26,16 @@ import crypto from 'crypto'
  *   `src/app/api/whatsapp/send/route.ts`.
  */
 
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY!
+function getEncryptionKeyBuffer(): Buffer {
+  const rawKey = (process.env.ENCRYPTION_KEY || '').trim().replace(/^["']|["']$/g, '')
+  if (!rawKey || rawKey.length !== 64 || !/^[0-9a-fA-F]{64}$/.test(rawKey)) {
+    throw new Error(
+      `ENCRYPTION_KEY is invalid or missing in environment variables. Expected 64 hex characters, got length ${rawKey.length}.`,
+    )
+  }
+  return Buffer.from(rawKey, 'hex')
+}
+
 // 12 bytes is the NIST-recommended IV length for GCM — keeps the
 // counter block well below 2^32 and matches the default web-crypto
 // behaviour, so any future port is straightforward.
@@ -38,7 +47,7 @@ export function encrypt(text: string): string {
   const iv = crypto.randomBytes(GCM_IV_LENGTH)
   const cipher = crypto.createCipheriv(
     'aes-256-gcm',
-    Buffer.from(ENCRYPTION_KEY, 'hex'),
+    getEncryptionKeyBuffer(),
     iv,
   )
   let encrypted = cipher.update(text, 'utf8', 'hex')
@@ -67,7 +76,7 @@ export function decrypt(encryptedText: string): string {
     }
     const decipher = crypto.createDecipheriv(
       'aes-256-gcm',
-      Buffer.from(ENCRYPTION_KEY, 'hex'),
+      getEncryptionKeyBuffer(),
       iv,
     )
     decipher.setAuthTag(authTag)
@@ -87,7 +96,7 @@ export function decrypt(encryptedText: string): string {
     }
     const decipher = crypto.createDecipheriv(
       'aes-256-cbc',
-      Buffer.from(ENCRYPTION_KEY, 'hex'),
+      getEncryptionKeyBuffer(),
       iv,
     )
     let decrypted = decipher.update(ctHex, 'hex', 'utf8')
