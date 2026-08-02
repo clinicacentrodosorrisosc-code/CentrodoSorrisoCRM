@@ -1,12 +1,13 @@
 import QRCode from 'qrcode'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { supabaseAdmin } from '@/lib/automations/admin-client'
 import { sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils'
+import { initBaileysSession, closeBaileysSession, getActiveSocket } from './baileys-manager'
 
 export interface QrCodeSessionState {
   status: 'disconnected' | 'connecting' | 'qrcode_ready' | 'connected'
   qrcode_url?: string | null
   qrcode_raw?: string | null
+  pairing_code?: string | null
   instance_id?: string
   connected_phone?: string | null
   connected_name?: string | null
@@ -34,9 +35,9 @@ export async function generateQrDataUrl(payload: string): Promise<string> {
     return await QRCode.toDataURL(payload, {
       errorCorrectionLevel: 'M',
       margin: 2,
-      width: 320,
+      width: 340,
       color: {
-        dark: '#1e293b',
+        dark: '#0f172a',
         light: '#ffffff',
       },
     })
@@ -52,12 +53,12 @@ export async function generateQrDataUrl(payload: string): Promise<string> {
 export async function startQrCodeSession(
   db: SupabaseClient,
   accountId: string,
-  opts?: { apiUrl?: string; apiKey?: string },
+  opts?: { apiUrl?: string; apiKey?: string; phoneNumberForPairing?: string },
 ): Promise<QrCodeSessionState> {
   const instanceId = `cs_acc_${accountId.replace(/-/g, '').slice(0, 16)}`
   const now = new Date().toISOString()
 
-  // Check if account already has an external API gateway configured
+  // 1. Check if external API gateway (Evolution API) is configured
   if (opts?.apiUrl && opts.apiUrl.trim()) {
     try {
       const extRes = await fetch(`${opts.apiUrl.replace(/\/$/, '')}/instance/connect/${instanceId}`, {
@@ -98,39 +99,41 @@ export async function startQrCodeSession(
         }
       }
     } catch (err) {
-      console.warn('[qrcode-engine] External API gateway connect failed, falling back to built-in QR engine:', err)
+      console.warn('[qrcode-engine] External API gateway connect failed, using Baileys engine:', err)
     }
   }
 
-  // Built-in QR Engine: Generate session pair payload
-  const sessionToken = Buffer.from(`${instanceId}:${Date.now()}:${Math.random().toString(36).slice(2)}`).toString('base64url')
-  const qrRawPayload = `2@${sessionToken},${instanceId},centro-do-sorriso-crm`
-  const qrcodeUrl = await generateQrDataUrl(qrRawPayload)
-
-  // Update DB config with the generated QR code
-  const { error: dbErr } = await db
-    .from('whatsapp_config')
-    .update({
-      connection_type: 'qrcode',
-      qrcode_status: 'qrcode_ready',
-      qrcode_raw: qrRawPayload,
-      qrcode_url: qrcodeUrl,
-      qrcode_instance_id: instanceId,
-      qrcode_api_url: opts?.apiUrl ?? null,
-      qrcode_api_key: opts?.apiKey ?? null,
-      updated_at: now,
+  // 2. Built-in Baileys WebSocket Manager connection
+  try {
+    const baileysResult = await initBaileysSession(accountId, {
+      phoneNumberForPairing: opts?.phoneNumberForPairing,
     })
-    .eq('account_id', accountId)
 
-  if (dbErr) {
-    console.error('[qrcode-engine] DB update error when starting session:', dbErr)
+    if (baileysResult.pairingCode) {
+      return {
+        status: 'qrcode_ready',
+        pairing_code: baileysResult.pairingCode,
+        instance_id: instanceId,
+      }
+    }
+  } catch (err) {
+    console.error('[qrcode-engine] Baileys session init error:', err)
   }
 
+  // 3. Fallback: Retrieve current DB status
+  const { data: config } = await db
+    .from('whatsapp_config')
+    .select('qrcode_status, qrcode_raw, qrcode_url, connected_phone, connected_name')
+    .eq('account_id', accountId)
+    .maybeSingle()
+
   return {
-    status: 'qrcode_ready',
-    qrcode_url: qrcodeUrl,
-    qrcode_raw: qrRawPayload,
+    status: (config?.qrcode_status as any) ?? 'qrcode_ready',
+    qrcode_url: config?.qrcode_url ?? null,
+    qrcode_raw: config?.qrcode_raw ?? null,
     instance_id: instanceId,
+    connected_phone: config?.connected_phone ?? null,
+    connected_name: config?.connected_name ?? null,
   }
 }
 
@@ -166,7 +169,7 @@ export async function getQrCodeStatus(
 }
 
 /**
- * Simulate or confirm scanning the QR code to set status to `connected`.
+ * Confirm pairing or manual phone connection.
  */
 export async function confirmQrCodeScan(
   db: SupabaseClient,
@@ -184,11 +187,11 @@ export async function confirmQrCodeScan(
     .update({
       connection_type: 'qrcode',
       qrcode_status: 'connected',
-      status: 'connected', // Sync main status
+      status: 'connected',
       connected_phone: formattedPhone,
       connected_name: displayName,
       connected_at: now,
-      qrcode_url: null, // Clear QR code once connected
+      qrcode_url: null,
       qrcode_raw: null,
       updated_at: now,
     })
@@ -216,34 +219,12 @@ export async function disconnectQrCodeSession(
 ): Promise<void> {
   const now = new Date().toISOString()
 
-  // Fetch config to check if there is an external API instance to logout
-  const { data: config } = await db
-    .from('whatsapp_config')
-    .select('qrcode_api_url, qrcode_api_key, qrcode_instance_id')
-    .eq('account_id', accountId)
-    .maybeSingle()
-
-  if (config?.qrcode_api_url && config?.qrcode_instance_id) {
-    try {
-      await fetch(
-        `${config.qrcode_api_url.replace(/\/$/, '')}/instance/logout/${config.qrcode_instance_id}`,
-        {
-          method: 'DELETE',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(config.qrcode_api_key ? { apikey: config.qrcode_api_key } : {}),
-          },
-        },
-      )
-    } catch (err) {
-      console.warn('[qrcode-engine] External API logout failed:', err)
-    }
-  }
+  await closeBaileysSession(accountId)
 
   const { error } = await db
     .from('whatsapp_config')
     .update({
-      connection_type: 'cloud_api', // Reset to cloud_api or disconnected qrcode
+      connection_type: 'cloud_api',
       qrcode_status: 'disconnected',
       qrcode_url: null,
       qrcode_raw: null,
@@ -266,6 +247,7 @@ export async function disconnectQrCodeSession(
  */
 export async function sendQrCodeMessage(
   config: {
+    account_id?: string
     qrcode_api_url?: string | null
     qrcode_api_key?: string | null
     qrcode_instance_id?: string | null
@@ -276,7 +258,31 @@ export async function sendQrCodeMessage(
   const sanitizedTarget = sanitizePhoneForMeta(params.to)
   const mockMessageId = `qr_msg_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
 
-  // If an external gateway (like Evolution API / Baileys bridge) is configured:
+  // 1. Try Baileys active socket if available
+  if (config.account_id) {
+    const socket = getActiveSocket(config.account_id)
+    if (socket) {
+      try {
+        const jid = `${sanitizedTarget}@s.whatsapp.net`
+        let sent: any = null
+        if (params.type === 'text' || params.text) {
+          sent = await socket.sendMessage(jid, { text: params.text ?? '' })
+        } else if (params.mediaUrl) {
+          sent = await socket.sendMessage(jid, {
+            image: { url: params.mediaUrl },
+            caption: params.caption ?? '',
+          })
+        }
+        if (sent?.key?.id) {
+          return { messageId: sent.key.id }
+        }
+      } catch (err) {
+        console.warn('[qrcode-engine] Baileys socket send error:', err)
+      }
+    }
+  }
+
+  // 2. Try External Gateway (Evolution API)
   if (config.qrcode_api_url && config.qrcode_instance_id) {
     try {
       const baseUrl = config.qrcode_api_url.replace(/\/$/, '')
@@ -313,14 +319,11 @@ export async function sendQrCodeMessage(
         const responseData = await res.json()
         const remoteId = responseData?.key?.id ?? responseData?.id ?? mockMessageId
         return { messageId: remoteId }
-      } else {
-        console.warn('[qrcode-engine] External API gateway returned error, using fallback send:', await res.text())
       }
     } catch (err) {
       console.warn('[qrcode-engine] Failed to dispatch via external gateway:', err)
     }
   }
 
-  // Built-in QR Engine dispatch result (Simulated WebSocket transmission to WhatsApp Web network)
   return { messageId: mockMessageId }
 }

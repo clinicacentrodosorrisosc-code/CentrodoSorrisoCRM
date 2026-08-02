@@ -129,6 +129,42 @@ export function WhatsAppConfig() {
   const [qrApiUrl, setQrApiUrl] = useState('');
   const [qrApiKey, setQrApiKey] = useState('');
 
+  // 8-digit Pairing Code state
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [pairingPhoneInput, setPairingPhoneInput] = useState('');
+  const [requestingPairingCode, setRequestingPairingCode] = useState(false);
+
+  async function handleRequestPairingCode() {
+    if (!pairingPhoneInput.trim()) {
+      toast.error('Digite seu número de telefone com DDD (ex: 5511999999999)');
+      return;
+    }
+    setRequestingPairingCode(true);
+    try {
+      const res = await fetch('/api/whatsapp/qrcode/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: pairingPhoneInput.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? 'Falha ao solicitar código de pareamento');
+        return;
+      }
+      if (data.session?.pairing_code) {
+        setPairingCode(data.session.pairing_code);
+        toast.success('Código de pareamento gerado! Digite-o no seu WhatsApp.');
+      } else {
+        handleStartQrSession();
+      }
+    } catch (err) {
+      console.error('handleRequestPairingCode error:', err);
+      toast.error('Erro ao conectar com o servidor');
+    } finally {
+      setRequestingPairingCode(false);
+    }
+  }
+
   // Auto-poll QR status every 3 seconds when waiting for QR scan
   useEffect(() => {
     if (connectionType !== 'qrcode' || qrStatus !== 'qrcode_ready') return;
@@ -807,6 +843,48 @@ export function WhatsAppConfig() {
                           </>
                         )}
                       </Button>
+
+                      {/* 8-Digit Pairing Code Option */}
+                      <div className="w-full max-w-md pt-6 mt-4 border-t border-border space-y-4 text-left">
+                        <div className="flex items-center gap-2">
+                          <Smartphone className="size-4 text-primary" />
+                          <h5 className="text-sm font-semibold text-foreground">
+                            Não consegue escanear? Conecte com Código de 8 Dígitos
+                          </h5>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Digite seu número de telefone e receba um código de pareamento para digitar diretamente no WhatsApp do seu celular.
+                        </p>
+                        
+                        {pairingCode ? (
+                          <div className="flex flex-col items-center justify-center p-4 rounded-xl border-2 border-emerald-500/50 bg-emerald-500/10 space-y-2 shadow-lg">
+                            <p className="text-xs font-semibold text-emerald-300">Seu Código de Pareamento do WhatsApp:</p>
+                            <div className="text-3xl font-mono font-bold tracking-widest text-emerald-400 bg-background px-4 py-2 rounded-lg border border-emerald-500/30">
+                              {pairingCode}
+                            </div>
+                            <p className="text-xs text-muted-foreground text-center pt-1">
+                              Abra o WhatsApp no celular → <strong>Aparelhos Conectados</strong> → <strong>Conectar um Aparelho</strong> → <strong>Conectar com número de telefone</strong> e digite o código acima.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="flex gap-2">
+                            <Input
+                              placeholder="Seu número com DDD (ex: 5511999999999)"
+                              value={pairingPhoneInput}
+                              onChange={(e) => setPairingPhoneInput(e.target.value)}
+                              className="text-xs bg-background"
+                            />
+                            <Button
+                              onClick={handleRequestPairingCode}
+                              disabled={requestingPairingCode || !pairingPhoneInput.trim()}
+                              className="text-xs bg-primary text-primary-foreground shrink-0 gap-1"
+                            >
+                              {requestingPairingCode ? <Loader2 className="size-3.5 animate-spin" /> : <Smartphone className="size-3.5" />}
+                              Gerar Código
+                            </Button>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
                 </CardContent>

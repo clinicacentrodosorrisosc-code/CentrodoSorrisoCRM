@@ -11,10 +11,12 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => ({}))
     const apiUrl = typeof body?.api_url === 'string' ? body.api_url.trim() : undefined
     const apiKey = typeof body?.api_key === 'string' ? body.api_key.trim() : undefined
+    const phone = typeof body?.phone === 'string' ? body.phone.trim() : undefined
 
     const sessionState = await startQrCodeSession(supabase, accountId, {
       apiUrl,
       apiKey,
+      phoneNumberForPairing: phone,
     })
 
     return NextResponse.json({ success: true, session: sessionState })
