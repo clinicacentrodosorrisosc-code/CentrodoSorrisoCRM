@@ -85,15 +85,45 @@ export async function metaCredsForPhoneNumberId(
   };
 }
 
+export async function metaCredsForSessionId(
+  admin: SupabaseClient,
+  sessionId: string,
+): Promise<MetaCredentials | null> {
+  if (!sessionId) return null;
+
+  const { data } = await admin
+    .from("channel_sessions")
+    .select("meta_phone_number_id, meta_token_encrypted")
+    .eq("id", sessionId)
+    .maybeSingle();
+
+  const cifrado = data?.meta_token_encrypted;
+  if (!data || !cifrado) return null;
+
+  const token = await decryptWebhookSecret(admin, cifrado as unknown as string);
+  if (!token) return null;
+
+  return {
+    phoneNumberId: data.meta_phone_number_id as string,
+    token,
+    graphVersion: graphVersion(),
+    source: "session",
+  };
+}
+
 /**
- * A credencial em vigor para este número: **sessão primeiro, env como fallback**.
+ * A credencial em vigor para este número/sessão: **sessão primeiro, env como fallback**.
  *
  * Uma instalação com várias organizações grava um token por sessão e cada uma envia
  * pelo seu; uma instalação de número único pode continuar no env sem tocar em nada.
  */
 export async function resolveMetaCreds(
   admin: SupabaseClient,
-  phoneNumberId: string,
+  phoneOrSessionId: string,
 ): Promise<MetaCredentials | null> {
-  return (await metaCredsForPhoneNumberId(admin, phoneNumberId)) ?? metaCredsFromEnv();
+  return (
+    (await metaCredsForPhoneNumberId(admin, phoneOrSessionId)) ??
+    (await metaCredsForSessionId(admin, phoneOrSessionId)) ??
+    metaCredsFromEnv()
+  );
 }

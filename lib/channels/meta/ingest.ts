@@ -96,23 +96,34 @@ async function findContactByVariants(
  */
 async function resolveMetaMediaUrl(
   admin: SupabaseClient,
-  phoneNumberId: string,
+  phoneOrSessionId: string,
   mediaId: string,
 ): Promise<string | null> {
   try {
-    const creds = await resolveMetaCreds(admin, phoneNumberId);
+    const creds = await resolveMetaCreds(admin, phoneOrSessionId);
     if (!creds) {
-      console.error("[meta.ingest] resolveMetaMediaUrl: sem credencial para phoneNumberId", phoneNumberId);
+      console.error("[meta.ingest] resolveMetaMediaUrl: sem credencial para", phoneOrSessionId);
       return null;
     }
     const version = process.env.META_GRAPH_VERSION ?? "v22.0";
-    // `phone_number_id` é obrigatório para System User Tokens — sem ele a Graph
-    // API devolve 403 para o token de sistema mesmo que o media_id seja válido.
-    const url = `https://graph.facebook.com/${version}/${mediaId}?phone_number_id=${phoneNumberId}`;
-    const res = await fetch(url, {
+
+    // 1. Tenta endpoint padrão direto
+    let res = await fetch(`https://graph.facebook.com/${version}/${mediaId}`, {
       headers: { Authorization: `Bearer ${creds.token}` },
       signal: AbortSignal.timeout(10_000),
     });
+
+    // 2. Se falhou, tenta com query param phone_number_id
+    if (!res.ok && creds.phoneNumberId) {
+      res = await fetch(
+        `https://graph.facebook.com/${version}/${mediaId}?phone_number_id=${creds.phoneNumberId}`,
+        {
+          headers: { Authorization: `Bearer ${creds.token}` },
+          signal: AbortSignal.timeout(10_000),
+        },
+      );
+    }
+
     if (!res.ok) {
       const txt = await res.text().catch(() => "");
       console.error("[meta.ingest] resolveMetaMediaUrl falhou", { status: res.status, body: txt.slice(0, 200) });
@@ -125,7 +136,6 @@ async function resolveMetaMediaUrl(
     return null;
   }
 }
-
 
 /** Prévia curta para a lista de conversas. Mídia vira rótulo, nunca URL. */
 function previewOf(e: InboundMessageEvent): string {
@@ -184,7 +194,7 @@ export async function ingestMetaInbound(
   // consiga baixar o arquivo enquanto a URL ainda está válida (~5 min).
   let mediaUrl: string | null = e.media?.url ?? null;
   if (!mediaUrl && e.media?.id) {
-    mediaUrl = await resolveMetaMediaUrl(admin, e.phoneNumberId, e.media.id);
+    mediaUrl = await resolveMetaMediaUrl(admin, sessao.id, e.media.id);
   }
 
   const { data: inserida, error: erroInsert } = await admin

@@ -1,11 +1,3 @@
-// app/api/v1/messages/[id]/media/route.ts
-/**
- * GET /api/v1/messages/[id]/media — acesso autenticado à mídia da mensagem.
- * Persistida → 302 pra signed URL (TTL 1h) do bucket whatsapp-media.
- * Ainda não persistida (janela até o worker rodar) → proxy dos bytes do WAHA.
- * A URL desta rota é usada diretamente como src de <img>/<video>/<audio>
- * (cookie de sessão vai junto por ser same-origin; RLS decide o acesso).
- */
 import { randomUUID } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -19,6 +11,8 @@ import {
   type ChannelProvider,
   type ChannelSessionRef,
 } from "@/lib/channels";
+import { resolveMetaCreds } from "@/lib/channels/meta/credentials";
+import { storagePathFor } from "@/lib/messaging/media/types";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -49,22 +43,22 @@ export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
   }
 
   // Client de sessão: RLS garante que a mensagem pertence a uma org do usuário.
-  // Filtro explícito de organization_id por doutrina (defense-in-depth).
   const { data: msg, error } = await supabase
     .from("messages")
-    .select("id, media_url, media_mime, media_storage_path, channel_session_id")
+    .select("id, media_url, media_mime, media_storage_path, channel_session_id, conversation_id, metadata, type")
     .eq("id", messageId)
     .eq("organization_id", activeOrg.orgId)
     .maybeSingle();
   if (error) {
     return fail("internal_error", "Erro ao buscar mensagem.", 500, { requestId });
   }
-  if (!msg || (!msg.media_storage_path && !msg.media_url)) {
-    return fail("not_found", "Mensagem sem mídia.", 404, { requestId });
+  if (!msg) {
+    return fail("not_found", "Mensagem não encontrada.", 404, { requestId });
   }
 
+  const admin = createAdminClient();
+
   if (msg.media_storage_path) {
-    const admin = createAdminClient();
     const { data: signed, error: signErr } = await admin.storage
       .from("whatsapp-media")
       .createSignedUrl(msg.media_storage_path, SIGNED_URL_TTL_S);
@@ -78,40 +72,68 @@ export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
     }
   }
 
-  // ── Fallback: o worker ainda não persistiu ──────────────────────────────────
-  //
-  // O drain é cron de minuto a minuto, então esta janela é diária: quem abre a
-  // conversa antes da persistência cai aqui. O browser não alcança o transporte
-  // nem tem a credencial, por isso o proxy é server-side.
-  //
-  // Pelo ADAPTER, não por uma função fixa. Esta era literalmente a linha que o
-  // conserto do worker removeu de lá e esqueceu aqui: com `fetchWahaMedia` em
-  // duro, o path de um anexo do canal intermediado era procurado dentro do
-  // contêiner do canal por QR — 404, e a tela dizia "mídia indisponível".
-  if (msg.media_url) {
-    try {
-      const admin = createAdminClient();
-      const { data: sessao } = await admin
-        .from("channel_sessions")
-        .select(`provider, ${CHANNEL_SESSION_REF_COLUMNS}`)
-        .eq("id", msg.channel_session_id)
-        .maybeSingle();
+  // ── Fallback: busca via adapter / Meta Cloud API sob demanda ─────────────────
+  try {
+    const { data: sessao } = await admin
+      .from("channel_sessions")
+      .select(`id, provider, ${CHANNEL_SESSION_REF_COLUMNS}`)
+      .eq("id", msg.channel_session_id)
+      .maybeSingle();
 
-      const adapter = getAdapter(
-        ((sessao?.provider as string) ?? DEFAULT_CHANNEL_PROVIDER) as ChannelProvider,
-      );
-      const sessionRef = sessao ? resolveSessionRef(sessao as unknown as ChannelSessionRef) : null;
-      if (!adapter.fetchInboundMedia || !sessionRef) {
-        // Canal sem mídia de entrada não é defeito: é estado normal. 404 diz a
-        // verdade ("não há o que servir"); 502 acusaria uma falha inexistente.
-        return fail("not_found", "Mensagem sem mídia.", 404, { requestId });
+    const provider = ((sessao?.provider as string) ?? DEFAULT_CHANNEL_PROVIDER) as ChannelProvider;
+    const adapter = getAdapter(provider);
+    const sessionRef = sessao ? resolveSessionRef(sessao as unknown as ChannelSessionRef) : null;
+
+    let targetUrl = msg.media_url;
+
+    // Se a mensagem é da Meta e não temos a URL (ou ela expirou), resolvemos pelo meta_media_id
+    if (provider === "meta_cloud" && (!targetUrl || targetUrl.length === 0)) {
+      const metaMediaId = (msg.metadata as Record<string, unknown> | null)?.meta_media_id as string | undefined;
+      if (metaMediaId && sessionRef) {
+        const creds = await resolveMetaCreds(admin, sessionRef);
+        if (creds) {
+          const graphRes = await fetch(
+            `https://graph.facebook.com/${creds.graphVersion}/${metaMediaId}`,
+            {
+              headers: { Authorization: `Bearer ${creds.token}` },
+              signal: AbortSignal.timeout(15_000),
+            },
+          );
+          if (graphRes.ok) {
+            const graphData = (await graphRes.json()) as { url?: string; mime_type?: string };
+            if (graphData.url) {
+              targetUrl = graphData.url;
+            }
+          }
+        }
       }
+    }
 
+    if (targetUrl && adapter.fetchInboundMedia && sessionRef) {
       const media = await adapter.fetchInboundMedia({
         sessionRef,
-        url: msg.media_url,
+        url: targetUrl,
         hintMime: msg.media_mime,
       });
+
+      // Salva no storage em background para acelerar as próximas reproduções
+      const path = storagePathFor(activeOrg.orgId, msg.conversation_id, msg.id, media.mime);
+      admin.storage
+        .from("whatsapp-media")
+        .upload(path, media.buffer, { contentType: media.mime, upsert: true })
+        .then(() => {
+          admin
+            .from("messages")
+            .update({
+              media_storage_path: path,
+              media_size_bytes: media.buffer.byteLength,
+              media_mime: media.mime,
+            })
+            .eq("id", msg.id)
+            .then(() => {});
+        })
+        .catch(() => {});
+
       return new Response(new Uint8Array(media.buffer), {
         status: 200,
         headers: {
@@ -120,10 +142,12 @@ export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
           "X-Request-Id": requestId,
         },
       });
-    } catch {
-      return fail("bad_gateway", "Mídia indisponível no momento.", 502, { requestId });
     }
+  } catch (err) {
+    console.error("[messages.media] proxy error", err);
+    return fail("bad_gateway", "Mídia indisponível no momento.", 502, { requestId });
   }
 
   return fail("not_found", "Mensagem sem mídia.", 404, { requestId });
 }
+

@@ -84,13 +84,10 @@ export async function listConversationsHandler(
   ctx: HandlerCtx,
   q: ListConversationsQuery,
 ): Promise<ListConversationsResult> {
-  // Fila (assigned_to=unassigned): ordena por TEMPO DE ESPERA — quem espera há
-  // mais tempo primeiro. `last_inbound_at` = última mensagem do cliente = "há
-  // quanto tempo aguarda resposta" (não `created_at`, que pode ser uma conversa
-  // antiga reaberta). Demais visões: por atividade recente (last_message_at desc).
-  const isQueue = q.assigned_to === "unassigned";
-  const sortCol = isQueue ? "last_inbound_at" : "last_message_at";
-  const asc = isQueue;
+  // Ordena sempre por atividade mais recente (last_message_at desc, nulls last)
+  // para que qualquer mensagem nova (inbound ou outbound) mova a conversa imediatamente para o topo.
+  const sortCol = "last_message_at";
+  const asc = false;
 
   let query = supabase
     .from("conversations")

@@ -34,7 +34,12 @@ export function MessageBubble({ message, debugCitations }: Props) {
   const isOutbound = message.direction === "outbound";
   const time = format(new Date(message.sent_at), "HH:mm", { locale: ptBR });
   const isFailed = message.status === "failed";
-  const hasMedia = Boolean(message.media_url || message.media_storage_path);
+  const hasMedia = Boolean(
+    message.media_url ||
+    message.media_storage_path ||
+    ["audio", "image", "video", "document", "sticker", "voice"].includes(message.type) ||
+    Boolean(message.metadata && (message.metadata.meta_media_id || message.metadata.voice)),
+  );
   // Figurinha sem caption: sem moldura de bolha (padrão WhatsApp).
   const isBareSticker = hasMedia && message.type === "sticker" && !message.body;
   // Apagada pelo autor ("apagar para todos"). A linha continua no histórico —

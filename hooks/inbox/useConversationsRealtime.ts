@@ -99,6 +99,7 @@ export function useConversationsRealtime(
     // chega de fora enquanto ninguém olha, e voltar para a aba é quando a
     // defasagem aparece. Segunda rede — a primeira é o Realtime.
     refetchOnWindowFocus: true,
+    refetchInterval: 5_000,
   });
 
   const onChange = useCallback(() => {
