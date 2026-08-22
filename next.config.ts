@@ -8,9 +8,9 @@ import type { NextConfig } from "next";
  *  - Initial bundle /app/inbox < 250KB gzipped
  */
 const nextConfig: NextConfig = {
-  // Self-host (HostGator): gera .next/standalone pro container Docker (node server.js).
-  // Aditivo — não afeta o deploy Vercel.
-  output: "standalone",
+  // Self-host (HostGator/Docker): gera .next/standalone pro container.
+  // Na Vercel (onde process.env.VERCEL === '1'), a Vercel gerencia as funções serverless nativamente e exige a ausência de standalone para gerar next-server.js.nft.json.
+  ...(process.env.VERCEL ? {} : { output: "standalone" }),
   reactStrictMode: true,
   poweredByHeader: false,
   // typedRoutes moved out of experimental in Next 15.5+
