@@ -25,6 +25,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { ARCHIVED_AT, queryTolerantToMissingArchived } from "../archived";
 import { phoneLookupVariants } from "../phone-variants";
+import { resolveMetaCreds } from "./credentials";
 import type { InboundMessageEvent } from "./webhook";
 
 type Admin = SupabaseClient;
@@ -76,6 +77,41 @@ async function findContactByVariants(
     .limit(1)
     .maybeSingle();
   return data ?? null;
+}
+
+/**
+ * Busca a URL temporária de download de mídia na Graph API.
+ *
+ * A Meta Cloud API NÃO entrega a URL no payload do webhook — entrega apenas o
+ * `media.id`. A URL precisa de uma segunda chamada GET /media/{id} com Bearer.
+ * A URL retornada expira (~5 minutos), mas é o suficiente para o worker de
+ * persistência baixar e gravar no bucket enquanto ainda está válida.
+ *
+ * Não lança: falha de rede ou token inválido não deve derrubar a ingestão.
+ * O desfecho é `media_url: null`, o worker vai tentar na próxima rodada.
+ */
+async function resolveMetaMediaUrl(
+  admin: SupabaseClient,
+  phoneNumberId: string,
+  mediaId: string,
+): Promise<string | null> {
+  try {
+    const creds = await resolveMetaCreds(admin, phoneNumberId);
+    if (!creds) return null;
+    const version = process.env.META_GRAPH_VERSION ?? "v22.0";
+    const res = await fetch(
+      `https://graph.facebook.com/${version}/${mediaId}`,
+      {
+        headers: { Authorization: `Bearer ${creds.token}` },
+        signal: AbortSignal.timeout(10_000),
+      },
+    );
+    if (!res.ok) return null;
+    const body = (await res.json()) as { url?: string };
+    return body.url ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** Prévia curta para a lista de conversas. Mídia vira rótulo, nunca URL. */
@@ -130,6 +166,14 @@ export async function ingestMetaInbound(
     return { status: "failed", reason: `conversa: ${erroConversa?.message ?? "sem id"}` };
   }
 
+  // A Meta não entrega a URL de mídia no webhook — apenas o media_id.
+  // Buscamos a URL temporária na Graph API para que o worker de persistência
+  // consiga baixar o arquivo enquanto a URL ainda está válida (~5 min).
+  let mediaUrl: string | null = e.media?.url ?? null;
+  if (!mediaUrl && e.media?.id) {
+    mediaUrl = await resolveMetaMediaUrl(admin, e.phoneNumberId, e.media.id);
+  }
+
   const { data: inserida, error: erroInsert } = await admin
     .from("messages")
     .insert({
@@ -144,6 +188,7 @@ export async function ingestMetaInbound(
       type: e.type === "text" ? "text" : e.type,
       body: e.text,
       external_id: e.externalId,
+      media_url: mediaUrl,
       media_mime: e.media?.mime ?? null,
       sent_at: e.sentAt.toISOString(),
       metadata: e.media ? { meta_media_id: e.media.id, voice: e.media.voice } : {},

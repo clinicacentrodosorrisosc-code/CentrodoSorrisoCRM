@@ -21,6 +21,7 @@
  */
 import { createAdminClient } from "@/lib/supabase/admin";
 import { resolveMetaCreds } from "../meta/credentials";
+import type { FetchedMedia } from "@/lib/messaging/media/types";
 import type { ChannelAdapter, ChannelHealth, OutboundEnvelope, RecipientInput } from "../types";
 
 /** Só dígitos. `+55 (31) 99896-6398` → `5531998966398`. */
@@ -204,5 +205,37 @@ export const metaCloudAdapter: ChannelAdapter = {
     }
 
     return { externalId: body.messages?.[0]?.id ?? null };
+  },
+
+  /**
+   * Baixa a mídia que o contato mandou, autenticando com o token da sessão.
+   *
+   * A Meta exige Bearer em QUALQUER download — mesmo para URLs "públicas" que
+   * ela entrega: sem o header a resposta é 403 e o atendente vê "mídia
+   * indisponível" com a conversa inteira conectada.
+   *
+   * O `sessionRef` do canal oficial é o `phone_number_id`, que é a chave
+   * de `resolveMetaCreds` — mesma resolução que o `send` usa.
+   */
+  async fetchInboundMedia(input: {
+    sessionRef: string;
+    url: string;
+    hintMime?: string | null;
+  }): Promise<FetchedMedia> {
+    const creds = await resolveMetaCreds(createAdminClient(), input.sessionRef);
+    if (!creds) throw new Error("meta_not_configured: sem credencial para baixar a mídia.");
+
+    const res = await fetch(input.url, {
+      headers: { Authorization: `Bearer ${creds.token}` },
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) {
+      throw new Error(`meta_media_failed: ${res.status} ${res.statusText}`.trim());
+    }
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+    // O content-type da resposta manda sobre a dica do webhook.
+    const mime = res.headers.get("content-type")?.split(";")[0]?.trim() || input.hintMime || "application/octet-stream";
+    return { buffer, mime };
   },
 };
