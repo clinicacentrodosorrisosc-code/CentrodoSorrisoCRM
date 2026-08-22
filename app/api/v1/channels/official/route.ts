@@ -63,19 +63,37 @@ async function adminGate(requestId: string): Promise<Gate> {
 
 /**
  * Base pública desta instalação — é o que o operador cola no dashboard da Meta.
- *
- * `env.*` e NÃO `process.env.NEXT_PUBLIC_APP_URL` direto: variáveis
- * `NEXT_PUBLIC_` são substituídas no BUILD, e a imagem genérica do self-host é
- * construída com `https://placeholder.invalid` (Dockerfile). Lendo direto do
- * `process.env`, a tela mostrava essa URL — e quem a colasse no dashboard
- * apontaria o webhook para o nada, sem erro em lugar nenhum.
  */
 function publicBase(req: NextRequest): string {
+  // 1. Variável explícita configurada (se não for placeholder nem localhost em prod)
   const configurada = env.NEXT_PUBLIC_APP_URL;
-  const usavel = configurada && !configurada.includes("placeholder.invalid") ? configurada : null;
+  if (
+    configurada &&
+    !configurada.includes("placeholder.invalid") &&
+    !configurada.includes("placeholder.supabase") &&
+    (!configurada.includes("localhost") || process.env.NODE_ENV === "development")
+  ) {
+    return configurada.replace(/\/$/, "");
+  }
+
+  // 2. Vercel URL automática
+  if (process.env.VERCEL_URL) {
+    return `https://${process.env.VERCEL_URL}`.replace(/\/$/, "");
+  }
+  if (process.env.NEXT_PUBLIC_VERCEL_URL) {
+    return `https://${process.env.NEXT_PUBLIC_VERCEL_URL}`.replace(/\/$/, "");
+  }
+
+  // 3. Headers de proxy reverso da requisição ativa
+  const proto = req.headers.get("x-forwarded-proto") || (req.url.startsWith("https") ? "https" : "http");
+  const host = req.headers.get("x-forwarded-host") || req.headers.get("host");
+  if (host && !host.includes("localhost")) {
+    return `${proto}://${host}`.replace(/\/$/, "");
+  }
+
   return (
-    usavel ?? req.headers.get("origin") ?? `${req.nextUrl.protocol}//${req.nextUrl.host}`
-  );
+    req.headers.get("origin") ?? `${req.nextUrl.protocol}//${req.nextUrl.host}`
+  ).replace(/\/$/, "");
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
