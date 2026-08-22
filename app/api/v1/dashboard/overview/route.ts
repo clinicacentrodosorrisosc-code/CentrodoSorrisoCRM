@@ -329,8 +329,14 @@ export async function GET(req: NextRequest): Promise<Response> {
       p_to: now.toISOString(),
     } as never);
 
-    if (attendantStats && Array.isArray(attendantStats) && attendantStats.length > 0) {
-      const validTimes = attendantStats
+    const attendantsList = (
+      Array.isArray(attendantStats)
+        ? attendantStats
+        : (attendantStats as { attendants?: Array<{ avg_first_response_seconds?: number }> } | null)?.attendants
+    ) ?? [];
+
+    if (Array.isArray(attendantsList) && attendantsList.length > 0) {
+      const validTimes = attendantsList
         .map((s: { avg_first_response_seconds?: number }) => s.avg_first_response_seconds)
         .filter((t): t is number => typeof t === "number" && t > 0);
 
@@ -340,8 +346,48 @@ export async function GET(req: NextRequest): Promise<Response> {
         );
       }
     }
+
+    // Fallback: cálculo direto caso não haja métrica por atendente atribuído
+    if (avgResponseTimeSeconds === null) {
+      const { data: convMessages } = await supabase
+        .from("messages")
+        .select("conversation_id, direction, sent_at, created_at")
+        .eq("organization_id", activeOrg.orgId)
+        .gte("created_at", fromDate.toISOString())
+        .order("created_at", { ascending: true })
+        .limit(300);
+
+      if (convMessages && convMessages.length > 0) {
+        const byConv = new Map<string, { in?: Date; out?: Date }>();
+        for (const msg of convMessages) {
+          const entry = byConv.get(msg.conversation_id) ?? {};
+          const msgDate = new Date(msg.sent_at || msg.created_at);
+          if (msg.direction === "inbound" && !entry.in) {
+            entry.in = msgDate;
+          } else if (msg.direction === "outbound" && entry.in && !entry.out) {
+            if (msgDate > entry.in) {
+              entry.out = msgDate;
+            }
+          }
+          byConv.set(msg.conversation_id, entry);
+        }
+
+        const deltas: number[] = [];
+        for (const { in: firstIn, out: firstOut } of byConv.values()) {
+          if (firstIn && firstOut) {
+            const diffSeconds = (firstOut.getTime() - firstIn.getTime()) / 1000;
+            if (diffSeconds > 0 && diffSeconds < 86400 * 7) {
+              deltas.push(diffSeconds);
+            }
+          }
+        }
+        if (deltas.length > 0) {
+          avgResponseTimeSeconds = Math.round(deltas.reduce((a, b) => a + b, 0) / deltas.length);
+        }
+      }
+    }
   } catch {
-    // Silently fallback if RPC not ready
+    // Silently fallback if RPC or calculation fails
   }
 
   // 8. Busca contatos para enriquecer os relatórios

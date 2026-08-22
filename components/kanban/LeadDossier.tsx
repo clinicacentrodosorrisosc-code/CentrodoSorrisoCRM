@@ -115,12 +115,12 @@ export function LeadDossier({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        className="flex w-full flex-col gap-0 p-0 sm:max-w-3xl md:max-w-4xl lg:max-w-5xl"
+        className="flex w-full flex-col gap-0 p-0 sm:max-w-3xl md:max-w-4xl lg:max-w-5xl h-full max-h-screen overflow-hidden bg-background"
         data-realtime-status={timeline.realtimeStatus.toLowerCase()}
         data-refetch-divergencias={timeline.seguranca.divergencias}
       >
         {/* Header do Dossiê */}
-        <SheetHeader className="border-b border-border bg-card px-4 py-3.5 space-y-2">
+        <SheetHeader className="shrink-0 border-b border-border bg-card px-4 py-3.5 space-y-2">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               <SheetTitle className="text-base font-semibold leading-tight text-text">
@@ -276,20 +276,22 @@ export function LeadDossier({
           </div>
         </SheetHeader>
 
-        {/* Corpo: Grade 2 Colunas no Desktop */}
-        <div className="grid flex-1 grid-cols-1 md:grid-cols-12 overflow-hidden">
+        {/* Corpo: Grade 2 Colunas no Desktop com scroll independente */}
+        <div className="grid flex-1 min-h-0 grid-cols-1 md:grid-cols-12 overflow-hidden">
           {/* Coluna 1 (Conversa / Chat do WhatsApp) */}
           <div
-            className={`flex flex-col border-r border-border md:col-span-6 lg:col-span-7 ${
+            className={`flex flex-col border-r border-border md:col-span-6 lg:col-span-7 min-h-0 h-full overflow-hidden ${
               activeTab === "chat" ? "flex" : "hidden md:flex"
             }`}
           >
             {conversationId ? (
               <>
-                <div className="flex-1 overflow-y-auto p-4">
+                <div className="flex-1 overflow-y-auto p-4 min-h-0">
                   <ChatThread conversationId={conversationId} />
                 </div>
-                <Composer conversationId={conversationId} />
+                <div className="shrink-0 border-t border-border bg-card/60">
+                  <Composer conversationId={conversationId} />
+                </div>
               </>
             ) : (
               <div className="flex flex-1 flex-col items-center justify-center p-8 text-center text-text-muted">
@@ -305,7 +307,7 @@ export function LeadDossier({
           {/* Coluna 2 (Dados do Lead e Linha do Tempo) */}
           <div
             ref={campos}
-            className={`flex flex-col overflow-y-auto p-4 md:col-span-6 lg:col-span-5 ${
+            className={`flex flex-col overflow-y-auto p-4 md:col-span-6 lg:col-span-5 min-h-0 h-full bg-card/30 ${
               activeTab === "dados" || activeTab === "timeline"
                 ? "flex"
                 : "hidden md:flex"
