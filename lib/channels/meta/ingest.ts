@@ -87,8 +87,12 @@ async function findContactByVariants(
  * A URL retornada expira (~5 minutos), mas é o suficiente para o worker de
  * persistência baixar e gravar no bucket enquanto ainda está válida.
  *
+ * ATENÇÃO: `?phone_number_id=` é OBRIGATÓRIO para tokens de sistema (System User
+ * Access Token). Sem ele a Graph devolve 403/404 silencioso — a URL não vem, a
+ * mídia fica sem `media_url` no banco e o player nunca aparece.
+ *
  * Não lança: falha de rede ou token inválido não deve derrubar a ingestão.
- * O desfecho é `media_url: null`, o worker vai tentar na próxima rodada.
+ * O desfecho é `media_url: null` com log de diagnóstico.
  */
 async function resolveMetaMediaUrl(
   admin: SupabaseClient,
@@ -97,22 +101,31 @@ async function resolveMetaMediaUrl(
 ): Promise<string | null> {
   try {
     const creds = await resolveMetaCreds(admin, phoneNumberId);
-    if (!creds) return null;
+    if (!creds) {
+      console.error("[meta.ingest] resolveMetaMediaUrl: sem credencial para phoneNumberId", phoneNumberId);
+      return null;
+    }
     const version = process.env.META_GRAPH_VERSION ?? "v22.0";
-    const res = await fetch(
-      `https://graph.facebook.com/${version}/${mediaId}`,
-      {
-        headers: { Authorization: `Bearer ${creds.token}` },
-        signal: AbortSignal.timeout(10_000),
-      },
-    );
-    if (!res.ok) return null;
+    // `phone_number_id` é obrigatório para System User Tokens — sem ele a Graph
+    // API devolve 403 para o token de sistema mesmo que o media_id seja válido.
+    const url = `https://graph.facebook.com/${version}/${mediaId}?phone_number_id=${phoneNumberId}`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${creds.token}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      console.error("[meta.ingest] resolveMetaMediaUrl falhou", { status: res.status, body: txt.slice(0, 200) });
+      return null;
+    }
     const body = (await res.json()) as { url?: string };
     return body.url ?? null;
-  } catch {
+  } catch (err) {
+    console.error("[meta.ingest] resolveMetaMediaUrl exception", err instanceof Error ? err.message : String(err));
     return null;
   }
 }
+
 
 /** Prévia curta para a lista de conversas. Mídia vira rótulo, nunca URL. */
 function previewOf(e: InboundMessageEvent): string {
