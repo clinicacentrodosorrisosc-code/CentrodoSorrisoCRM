@@ -213,9 +213,34 @@ export async function ingestMetaInbound(
     p_at: e.sentAt.toISOString(),
   } as never);
 
+  // Dispara a persistência da mídia — fire-and-forget, mesmo padrão do WAHA.
+  //
+  // A URL temporária retornada pela Graph API expira em ~5 minutos. Sem este
+  // evento o worker nunca é acordado e a URL expira antes de ser baixada;
+  // o atendente vê o player mas o áudio não carrega (403 na tentativa de fetch).
+  //
+  // O insert acima já guardou a URL enquanto ela é válida — o worker só precisa
+  // buscar a linha, chamar `fetchInboundMedia` e subir para o bucket. A partir
+  // daí o `media_storage_path` garante disponibilidade permanente (signed URL 1h).
+  const inseridaId = (inserida as { id: string } | null)?.id;
+  if (inseridaId && mediaUrl) {
+    admin
+      .rpc("emit_event" as never, {
+        p_event_type: "media.persist_requested",
+        p_entity_kind: "message",
+        p_entity_id: inseridaId,
+        p_payload: { message_id: inseridaId, conversation_id: conversationId as string },
+        p_metadata: { source: "meta_webhook" },
+        p_organization_id: orgId,
+      } as never)
+      .then(({ error }: { error: { message: string } | null }) => {
+        if (error) console.error("[meta.ingest] emit media.persist_requested failed", error.message);
+      });
+  }
+
   return {
     status: "ingested",
-    messageId: (inserida as { id: string } | null)?.id ?? "",
+    messageId: inseridaId ?? "",
     conversationId: conversationId as string,
   };
 }
