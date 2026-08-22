@@ -73,23 +73,16 @@ describe("adapter meta_cloud — endereçamento", () => {
 });
 
 describe("adapter meta_cloud — configuração", () => {
-  it("sem credencial NÃO está configurado", () => {
-    vi.stubEnv("META_PHONE_NUMBER_ID", "");
-    vi.stubEnv("META_SYSTEM_USER_TOKEN", "");
-    expect(a().isConfigured()).toBe(false);
-  });
-
-  it("com credencial está configurado", () => {
-    configurar();
+  it("isConfigured responde sempre true (credencial vive na sessão/banco)", () => {
     expect(a().isConfigured()).toBe(true);
   });
 
-  it("não configurado é NOOP no envio, nunca exceção", async () => {
-    // Mesmo contrato do outro canal: a UI mostra banner, o handler grava `queued`.
+  it("não configurado lança no envio para o handler enfileirar", async () => {
     vi.stubEnv("META_PHONE_NUMBER_ID", "");
     vi.stubEnv("META_SYSTEM_USER_TOKEN", "");
-    const r = await a().send({ sessionRef: "x", to: "5531999", kind: "text", body: "oi" });
-    expect(r).toEqual({ externalId: null });
+    await expect(
+      a().send({ sessionRef: "x", to: "5531999", kind: "text", body: "oi" }),
+    ).rejects.toThrow("meta_not_configured");
   });
 
   it("os códigos carregam o nome do provider — por isso vivem no adapter", () => {

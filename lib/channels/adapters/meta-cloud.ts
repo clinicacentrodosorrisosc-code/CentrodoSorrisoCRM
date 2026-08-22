@@ -100,9 +100,9 @@ export const metaCloudAdapter: ChannelAdapter = {
    * propósito e não de passagem. Fica registrado aqui para quem for fazê-la.
    */
   isConfigured(): boolean {
-    // Síncrono por contrato. Com credencial na sessão, quem confirma é o `send`
-    // (async) — ver o comentário acima.
-    return metaCredsFromEnv() !== null;
+    // Retorna true porque a credencial reside na sessão (banco de dados) após conectar na tela.
+    // A validação real é feita assincronamente pelo send().
+    return true;
   },
 
   /**
@@ -168,9 +168,9 @@ export const metaCloudAdapter: ChannelAdapter = {
     // Sessão primeiro, env como fallback. O `sessionRef` do canal oficial É o
     // `phone_number_id` (ver `resolveSessionRef`), então ele é a chave da busca.
     const creds = await resolveMetaCreds(createAdminClient(), envelope.sessionRef);
-    // Mesmo contrato do outro canal: sem credencial é NOOP, não exceção. A UI mostra
-    // o banner de "canal não conectado"; transformar em erro mudaria comportamento.
-    if (!creds) return { externalId: null };
+    if (!creds) {
+      throw new Error("meta_not_configured: nenhuma credencial encontrada para este número oficial.");
+    }
 
     const corpo = mediaPayload(envelope) ?? { type: "text", text: { body: envelope.body ?? "" } };
 
