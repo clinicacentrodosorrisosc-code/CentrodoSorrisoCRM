@@ -51,6 +51,19 @@ export function useMessagesRealtime(conversationId: string | null) {
      * "às vezes preciso atualizar para a mensagem aparecer".
      */
     refetchOnWindowFocus: true,
+    /**
+     * Rede de segurança contra falha silenciosa do Realtime.
+     *
+     * O Supabase Realtime exige autenticação antes do subscribe (rota
+     * `/api/v1/auth/realtime-token`). No Vercel Hobby, cold start faz a rota
+     * levar >1,5s — o teto do hook — e a subscription começa ANÔNIMA. Com RLS
+     * por `auth.uid()`, assinatura anônima recebe ZERO eventos em silêncio.
+     *
+     * O intervalo de 5s garante que mensagens inbound apareçam em no máximo 5s
+     * mesmo quando o Realtime não entrega. Quando o Realtime funciona, o
+     * polling é um refetch no-op (dados idênticos = sem re-render).
+     */
+    refetchInterval: 5_000,
   });
 
   const onChange = useCallback(() => {
