@@ -87,6 +87,10 @@ export const waitConfigSchema = z
       max_ms: z.number().int().max(7_776_000_000),
       guidance: z.string().max(500).optional(),
     }),
+    z.strictObject({
+      mode: z.literal('before_appointment'),
+      offset_hours: z.number().min(0.1).max(720),
+    }),
   ])
   .refine((c) => c.mode !== 'smart' || c.min_ms <= c.max_ms, {
     message: 'min_ms must be <= max_ms',
@@ -149,11 +153,11 @@ export const actionConfigSchema = z.discriminatedUnion('mode', [
   z.strictObject({
     mode: z.literal('ai_message'),
     prompt_hint: z.string().min(1).max(1000),
-    fallback_template_id: z.string().uuid().optional(),
+    fallback_template_id: z.string().min(1).max(120).optional(),
   }),
   z.strictObject({
     mode: z.literal('template'),
-    template_id: z.string().uuid(),
+    template_id: z.string().min(1).max(120),
   }),
 ]);
 

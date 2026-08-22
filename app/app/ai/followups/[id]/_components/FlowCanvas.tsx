@@ -113,6 +113,23 @@ function FlowCanvasInner({ flowId, initialData }: Props) {
     setSelectedEdgeId(null);
   }, []);
 
+  const deleteNode = useCallback(
+    (id: string) => {
+      setNodes((nds) => nds.filter((n) => n.id !== id));
+      setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id));
+      setSelectedNodeId((cur) => (cur === id ? null : cur));
+    },
+    [setNodes, setEdges],
+  );
+
+  const deleteEdge = useCallback(
+    (id: string) => {
+      setEdges((eds) => eds.filter((e) => e.id !== id));
+      setSelectedEdgeId((cur) => (cur === id ? null : cur));
+    },
+    [setEdges],
+  );
+
   const updateNodeData = useCallback(
     (id: string, patch: Partial<RFNodeData>) => {
       setNodes((nds) => nds.map((n) => (n.id === id ? { ...n, data: { ...n.data, ...patch } } : n)));
@@ -258,6 +275,7 @@ function FlowCanvasInner({ flowId, initialData }: Props) {
             onNodeClick={onNodeClick}
             onEdgeClick={onEdgeClick}
             onPaneClick={onPaneClick}
+            deleteKeyCode={["Backspace", "Delete"]}
             fitView
           >
             <Background />
@@ -276,6 +294,7 @@ function FlowCanvasInner({ flowId, initialData }: Props) {
               key={selectedNode.id}
               node={selectedNode}
               onChange={(patch) => updateNodeData(selectedNode.id, patch)}
+              onDelete={() => deleteNode(selectedNode.id)}
               ramosLigados={ramosLigadosDoSelecionado}
             />
           </aside>
@@ -292,6 +311,7 @@ function FlowCanvasInner({ flowId, initialData }: Props) {
               targetNode={selectedEdgeTarget ? toFlowNode(selectedEdgeTarget) : undefined}
               condition={selectedEdge.data?.condition ?? { type: "always" }}
               onChange={(condition) => updateEdgeCondition(selectedEdge.id, condition)}
+              onDelete={() => deleteEdge(selectedEdge.id)}
             />
           </aside>
         )}

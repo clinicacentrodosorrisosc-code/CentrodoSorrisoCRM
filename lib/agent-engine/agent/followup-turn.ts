@@ -71,6 +71,7 @@ export const followupTurnPayloadSchema = z
     node_id: z.string().min(1).optional(),
     purpose: z.enum(['send_message', 'classify', 'plan_timing']).optional(),
     prompt_hint: z.string().optional(),
+    template_id: z.string().optional(),
     classes: z.array(z.string()).optional(),
     hint: z.string().optional(),
     // purpose 'plan_timing': as esperas adaptativas do fluxo inteiro, na ordem.
@@ -282,6 +283,7 @@ export function createFollowupTurnHandler(deps: FollowupTurnDeps) {
         nodeId: payload.node_id,
         purpose: payload.purpose,
         promptHint: payload.prompt_hint,
+        templateId: payload.template_id,
         classes: payload.classes,
         hint: payload.hint,
         waits: payload.waits,
@@ -345,6 +347,7 @@ async function runFlowDrivenTurn(
     nodeId: string | undefined;
     purpose: 'send_message' | 'classify' | 'plan_timing' | undefined;
     promptHint: string | undefined;
+    templateId: string | undefined;
     classes: string[] | undefined;
     hint: string | undefined;
     waits: EsperaParaPlanejar[] | undefined;
@@ -363,16 +366,20 @@ async function runFlowDrivenTurn(
   const runLog = withFields(deps.log, { job_id: job.id, tenant_id: target.tenantId, lead_id: target.leadId, enrollment_id: enrollmentId });
 
   if (input.purpose === 'send_message') {
-    await runAgentTurn(deps, job, pool, ctx, {
-      channelSessionId: target.channelSessionId,
-      conversationId: target.conversationId,
-      buildOpening: ({ previous, leadState, context, notesIndexBlock, projeta }) => {
-        const temporalBlock = buildTemporalBlock({ now: clock(), lastInbound: lastInboundOf(context) });
-        const opening = buildFollowupOpeningMessage(temporalBlock, previous, leadState, context, notesIndexBlock, projeta);
-        if (!input.promptHint) return opening;
-        return `${opening}\n\n## Orientação do passo do fluxo\n${input.promptHint}`;
-      },
-    });
+    if (input.templateId) {
+      await sendFollowupTemplate(deps, job, pool, ctx, clock, target, input.templateId);
+    } else {
+      await runAgentTurn(deps, job, pool, ctx, {
+        channelSessionId: target.channelSessionId,
+        conversationId: target.conversationId,
+        buildOpening: ({ previous, leadState, context, notesIndexBlock, projeta }) => {
+          const temporalBlock = buildTemporalBlock({ now: clock(), lastInbound: lastInboundOf(context) });
+          const opening = buildFollowupOpeningMessage(temporalBlock, previous, leadState, context, notesIndexBlock, projeta);
+          if (!input.promptHint) return opening;
+          return `${opening}\n\n## Orientação do passo do fluxo\n${input.promptHint}`;
+        },
+      });
+    }
     await complete(pool, { organizationId: target.tenantId, enrollmentId, nodeId, result: { kind: 'sent' } });
     return;
   }
@@ -601,4 +608,192 @@ async function rescheduleReentry(
     payload: { ...input.payload, reschedule_of: input.jobId },
     staggerWindowMs: 0,
   });
+}
+
+/**
+ * Envia um template (oficial Meta ou modelo rápido de inbox) configurado num nó de Ação
+ * do construtor de fluxo, resolvendo automaticamente variáveis a partir dos campos do Lead.
+ */
+async function sendFollowupTemplate(
+  deps: FollowupTurnDeps,
+  job: JobRow,
+  pool: pg.Pool,
+  ctx: { workerId: string },
+  clock: () => Date,
+  target: ReentrySendTarget,
+  templateId: string,
+): Promise<void> {
+  const { tenantId, leadId, conversationId } = target;
+  const runLog = withFields(deps.log, { job_id: job.id, tenant_id: tenantId, lead_id: leadId, template_id: templateId });
+
+  if (await isLeadInHandoff(pool, tenantId, leadId)) {
+    runLog.info('envio de template do fluxo pulado — lead em handoff/silenciado');
+    return;
+  }
+
+  const context = await getLeadContext(pool, deps.crmCfg, { tenantId, leadId }, {
+    historyLimit: 5,
+    maxTokens: 500,
+  });
+  if (!context.ok) {
+    throw new Error(`envio de template do fluxo falhou em get_lead_context (${context.error.code})`);
+  }
+
+  const contact = context.context.contact;
+  if (contact.is_blocked) {
+    runLog.info('envio de template do fluxo pulado — contato bloqueado (opt-out)');
+    return;
+  }
+
+  const { createAdminClient } = await import('@/lib/supabase/admin');
+  const admin = createAdminClient();
+
+  // 1. Obter contato no CRM
+  const { data: contactRow } = await admin
+    .from('contacts')
+    .select('id, name, display_name, phone_number, is_blocked')
+    .eq('organization_id', tenantId)
+    .eq('id', leadId)
+    .maybeSingle();
+
+  if (contactRow?.is_blocked || contact.is_blocked) {
+    runLog.info('envio de template do fluxo pulado — contato bloqueado (opt-out)');
+    return;
+  }
+
+  // 2. Obter campos e título do Lead no CRM
+  const { data: leadRow } = await admin
+    .from('crm_leads')
+    .select('id, title, custom_fields')
+    .eq('organization_id', tenantId)
+    .eq('contact_id', leadId)
+    .maybeSingle();
+
+  const customFields = (leadRow?.custom_fields ?? {}) as Record<string, unknown>;
+  const leadTitle = (leadRow?.title || contactRow?.name || contactRow?.display_name || contact.name || 'Paciente').trim();
+
+  // 3. Verificar se é template oficial Meta
+  const { data: metaTemplate } = await admin
+    .from('meta_templates')
+    .select('name, language, status, components, contract_hash')
+    .eq('organization_id', tenantId)
+    .eq('name', templateId)
+    .maybeSingle();
+
+  let formattedAgendamento = '';
+  const agData = String(customFields.agendamento_data ?? '');
+  const agHora = String(customFields.agendamento_hora ?? '');
+  if (agData) {
+    const parts = agData.split('-');
+    if (parts.length === 3) {
+      const [ano, mes, dia] = parts;
+      formattedAgendamento = `${dia}/${mes}/${ano}`;
+      if (agHora) {
+        formattedAgendamento += ` às ${agHora}`;
+      }
+    }
+  }
+
+  if (metaTemplate) {
+    const values: Record<string, string> = {};
+    const comps = Array.isArray(metaTemplate.components) ? (metaTemplate.components as Array<Record<string, unknown>>) : [];
+
+    for (const comp of comps) {
+      const text = typeof comp.text === 'string' ? comp.text : '';
+      const matches = text.match(/\{\{(\d+)\}\}/g) ?? [];
+      for (const m of matches) {
+        const num = m.replace(/[\{\}]/g, '');
+        let val = '';
+        if (num === '1') {
+          val = leadTitle;
+        } else if (num === '2') {
+          val = formattedAgendamento || 'em breve';
+        } else {
+          val = String(customFields[`campo_${num}`] ?? customFields.procedimento ?? customFields.clinica ?? 'Centro do Sorriso');
+        }
+        values[`body_${num}`] = val;
+        values[num] = val;
+      }
+    }
+
+    if (!values['1']) values['1'] = leadTitle;
+    if (!values['body_1']) values['body_1'] = leadTitle;
+    if (!values['2'] && formattedAgendamento) values['2'] = formattedAgendamento;
+    if (!values['body_2'] && formattedAgendamento) values['body_2'] = formattedAgendamento;
+
+    const rawPhone = contactRow?.phone_number || contact.phone || '';
+    const phoneDigits = rawPhone.replace(/\D/g, '');
+
+    const { sendTemplateForSession } = await import('@/lib/channels/meta/send-template-for-session');
+    const externalId = await sendTemplateForSession(admin, {
+      organizationId: tenantId,
+      to: phoneDigits,
+      name: metaTemplate.name,
+      language: metaTemplate.language,
+      values,
+    });
+
+    const bodyPreview = (comps.find((c) => c.type === 'BODY')?.text as string || metaTemplate.name)
+      .replace(/\{\{1\}\}/g, leadTitle)
+      .replace(/\{\{2\}\}/g, formattedAgendamento || 'em breve');
+
+    const { error: msgErr } = await admin.from('messages').insert({
+      organization_id: tenantId,
+      conversation_id: conversationId,
+      contact_id: leadId,
+      channel_session_id: target.channelSessionId,
+      type: 'template',
+      direction: 'outbound',
+      status: 'sent',
+      body: bodyPreview,
+      template_name: metaTemplate.name,
+      template_language: metaTemplate.language,
+      external_id: externalId ?? null,
+      sent_via: 'ai',
+      sent_at: clock().toISOString(),
+    });
+
+    if (msgErr) {
+      runLog.warn('Falha ao registrar mensagem no histórico do CRM', { error: msgErr.message });
+    }
+
+    runLog.info('Template oficial Meta enviado com sucesso pelo fluxo', {
+      template: metaTemplate.name,
+      external_id: externalId,
+    });
+    return;
+  }
+
+  // 2. Verificar se é modelo rápido do inbox
+  const { data: cannedTemplate } = await admin
+    .from('message_templates')
+    .select('id, title, content')
+    .eq('organization_id', tenantId)
+    .eq('id', templateId)
+    .maybeSingle();
+
+  if (cannedTemplate) {
+    const body = cannedTemplate.content
+      .replace(/\{\{titulo\}\}/gi, leadTitle)
+      .replace(/\{\{titulo_lead\}\}/gi, leadTitle)
+      .replace(/\{\{nome\}\}/gi, leadTitle)
+      .replace(/\{\{primeiro_nome\}\}/gi, leadTitle.split(' ')[0] || leadTitle)
+      .replace(/\{\{data_agendamento\}\}/gi, formattedAgendamento)
+      .replace(/\{\{data\}\}/gi, agData)
+      .replace(/\{\{hora\}\}/gi, agHora);
+
+    const channel = (deps.channel ?? ((p: pg.Pool) => new WahaChannelAdapter(p, deps.crmCfg)))(pool);
+    await channel.send({
+      tenantId,
+      leadId,
+      jobId: job.id,
+      seq: 1,
+      conversationId,
+      body,
+    });
+    runLog.info('Modelo rápido enviado com sucesso pelo fluxo', { title: cannedTemplate.title });
+    return;
+  }
+
+  throw new Error(`Template "${templateId}" não encontrado no banco`);
 }

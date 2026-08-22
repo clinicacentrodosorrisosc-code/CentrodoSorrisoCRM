@@ -1,15 +1,32 @@
 "use client";
-import { useRef } from "react";
-
+import { useState, useRef } from "react";
+import Link from "next/link";
+import { toast } from "sonner";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Button } from "@/components/ui/button";
 import { useLeadTimeline } from "@/hooks/leads/useLeadTimeline";
+import { useEditLead } from "@/hooks/kanban/useUpdateLead";
+import { useMoveCard } from "@/hooks/kanban/useMoveCard";
+import { useBoard } from "@/hooks/kanban/useBoard";
 import type { Lead } from "@/lib/types/leads";
-import { ConversaNoDossie } from "./ConversaNoDossie";
+import type { UpdateLeadInput } from "@/lib/schemas/leads";
 import { LeadFieldsForm } from "./LeadFieldsForm";
 import { ScoreSlot } from "./ScoreSlot";
 import { LeadTimeline } from "./LeadTimeline";
 import { OwnerBadge } from "./OwnerBadge";
 import { resolveLeadOwner } from "@/lib/kanban/owner";
+import { ChatThread } from "@/components/inbox/ChatThread";
+import { Composer } from "@/components/inbox/Composer";
+import {
+  ChatCircle,
+  ArrowSquareOut,
+  ClockCounterClockwise,
+  IdentificationCard,
+  WhatsappLogo,
+  CheckCircle,
+  XCircle,
+  CalendarBlank,
+} from "@/lib/ui/icons";
 
 interface Props {
   open: boolean;
@@ -33,19 +50,6 @@ function formatBRL(cents: number | null, currency: string | null): string {
   }
 }
 
-/**
- * O dossiê do negócio: cabeçalho vivo → timeline → campos.
- *
- * A ORDEM É a mudança em relação ao diálogo de edição: quem abre um lead quer
- * primeiro saber O QUE ACONTECEU, e só depois mexer. O formulário íntegro fica
- * por último, e o cabeçalho tem um atalho para ele — ordem preservada, custo de
- * rolagem resolvido.
- *
- * SALVAR NÃO FECHA. Quem edita precisa ver a atividade que acabou de gerar
- * entrar na timeline; fechar esconderia o registro justamente de quem o
- * produziu, e a funcionalidade que prova "sua ação fica registrada" provaria
- * isso para todo mundo menos para o autor.
- */
 export function LeadDossier({
   open,
   onOpenChange,
@@ -58,90 +62,272 @@ export function LeadDossier({
   const timeline = useLeadTimeline(open ? lead.id : null, lead.contact_id);
   const owner = resolveLeadOwner(lead, ownerNames);
   const score = lead.score ?? null;
+  const [activeTab, setActiveTab] = useState<"chat" | "dados" | "timeline">("chat");
+
+  const edit = useEditLead(pipelineId);
+  const move = useMoveCard(pipelineId);
+  const { data: boardData } = useBoard(pipelineId);
+
+  const conversationId = lead.conversa?.id ?? null;
+
+  const customFields = (lead.custom_fields ?? {}) as Record<string, unknown>;
+  const agendamentoData = String(customFields.agendamento_data ?? "").trim();
+  const agendamentoHora = String(customFields.agendamento_hora ?? "").trim();
+  const agendamentoStatus = String(customFields.agendamento_status ?? "agendado");
+
+  async function handleHeaderMarcarPresenca(status: "compareceu" | "faltou") {
+    try {
+      await edit.mutateAsync({
+        leadId: lead.id,
+        patch: {
+          custom_fields: {
+            ...customFields,
+            agendamento_status: status,
+            agendamento_data: agendamentoData || new Date().toISOString().slice(0, 10),
+          },
+        } as UpdateLeadInput,
+      });
+
+      if (status === "faltou" && boardData?.stages) {
+        const noShowStage = boardData.stages.find((s) =>
+          /n[aã]o\s*compareceu|faltou|no[-\s]?show/i.test(s.name),
+        );
+        if (noShowStage && noShowStage.id !== lead.stage_id) {
+          await move.mutateAsync({
+            leadId: lead.id,
+            stageId: noShowStage.id,
+            positionInStage: 1000,
+            expectedUpdatedAt: lead.updated_at,
+          });
+          toast.success(`Marcado como Não Compareceu e movido para "${noShowStage.name}"!`);
+        } else {
+          toast.error("Lead marcado como Não Compareceu (Falta registrada)");
+        }
+      } else {
+        toast.success("Presença confirmada! Paciente compareceu à avaliação.");
+      }
+    } catch {
+      // toast shown
+    }
+  }
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        className="flex w-full flex-col gap-0 overflow-y-auto sm:max-w-md"
-        // Observável pelo mesmo motivo do board: "a assinatura morreu" e "nada
-        // aconteceu" têm a mesma aparência, que é silêncio.
+        className="flex w-full flex-col gap-0 p-0 sm:max-w-3xl md:max-w-4xl lg:max-w-5xl"
         data-realtime-status={timeline.realtimeStatus.toLowerCase()}
-        // Observável como no board: "a entrega morreu" e "nada aconteceu"
-        // têm a mesma aparência, e no dossiê a segunda é ainda mais crível —
-        // negócio sem novidade é um estado normal.
         data-refetch-divergencias={timeline.seguranca.divergencias}
       >
-        <SheetHeader className="pb-3">
-          <SheetTitle className="text-base leading-6">{lead.title}</SheetTitle>
+        {/* Header do Dossiê */}
+        <SheetHeader className="border-b border-border bg-card px-4 py-3.5 space-y-2">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <SheetTitle className="text-base font-semibold leading-tight text-text">
+                {lead.title}
+              </SheetTitle>
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-text-muted">
+                <span className="font-semibold text-primary tabular-nums">
+                  {formatBRL(lead.value_cents, lead.currency)}
+                </span>
+                <span>•</span>
+                <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium text-text">
+                  {stageName}
+                </span>
+                <span>•</span>
+                <OwnerBadge
+                  ownerKind={owner.kind}
+                  ownerName={owner.name}
+                  agentVersion={owner.agentVersion}
+                />
+                {lead.source && (
+                  <>
+                    <span>•</span>
+                    <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                      {lead.source}
+                    </span>
+                  </>
+                )}
+                {agendamentoData && (
+                  <>
+                    <span>•</span>
+                    <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                      agendamentoStatus === "faltou"
+                        ? "bg-red-500/20 text-red-700 dark:text-red-300"
+                        : agendamentoStatus === "compareceu"
+                          ? "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"
+                          : "bg-sky-500/15 text-sky-700 dark:text-sky-300"
+                    }`}>
+                      {agendamentoStatus === "faltou" ? "🔴 FALTOU" : agendamentoStatus === "compareceu" ? "🟢 COMPARECEU" : "📅 AGENDADO"}: {agendamentoData.split("-").reverse().join("/")}
+                      {agendamentoHora ? ` às ${agendamentoHora}` : ""}
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Ações no Topo */}
+            <div className="flex items-center gap-2 flex-wrap">
+              {score && (
+                <ScoreSlot
+                  probability={score.probability}
+                  band={score.band}
+                  reason={score.reason}
+                  factors={score.factors.slice(0, 3)}
+                />
+              )}
+              {conversationId && (
+                <Link
+                  href={`/app/inbox?id=${conversationId}`}
+                  target="_blank"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/60 px-2.5 py-1 text-xs font-medium text-text transition-colors hover:bg-muted hover:text-primary"
+                  title="Abrir conversa completa no Inbox"
+                >
+                  <WhatsappLogo size={14} className="text-emerald-500" weight="fill" />
+                  <span className="hidden sm:inline">Abrir no Inbox</span>
+                  <ArrowSquareOut size={13} className="text-text-muted" />
+                </Link>
+              )}
+            </div>
+          </div>
+
+          {/* ========================================================= */}
+          {/* BARRA DE AÇÃO RÁPIDA DE PRESENÇA (SEMPRE VISÍVEL NO TOPO)  */}
+          {/* ========================================================= */}
+          <div className="flex items-center justify-between gap-2 rounded-lg bg-muted/50 p-2 text-xs border border-border/40 flex-wrap">
+            <div className="flex items-center gap-1.5 font-semibold text-foreground">
+              <CalendarBlank size={14} className="text-primary" />
+              <span>Avaliação:</span>
+              {agendamentoData ? (
+                <span className="font-medium text-muted-foreground">
+                  {agendamentoData.split("-").reverse().join("/")} {agendamentoHora ? `às ${agendamentoHora}` : ""}
+                </span>
+              ) : (
+                <span className="text-muted-foreground text-[11px]">(Data não definida)</span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <Button
+                type="button"
+                size="sm"
+                variant={agendamentoStatus === "compareceu" ? "default" : "outline"}
+                onClick={() => handleHeaderMarcarPresenca("compareceu")}
+                className={`h-7 px-2.5 text-[11px] font-bold gap-1 shadow-xs ${
+                  agendamentoStatus === "compareceu"
+                    ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                    : "border-emerald-500/50 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10"
+                }`}
+              >
+                <CheckCircle size={13} weight="bold" /> Compareceu
+              </Button>
+
+              <Button
+                type="button"
+                size="sm"
+                variant={agendamentoStatus === "faltou" ? "destructive" : "outline"}
+                onClick={() => handleHeaderMarcarPresenca("faltou")}
+                className={`h-7 px-2.5 text-[11px] font-bold gap-1 shadow-xs ${
+                  agendamentoStatus === "faltou"
+                    ? "bg-red-600 hover:bg-red-700 text-white"
+                    : "border-red-500/50 text-red-700 dark:text-red-300 hover:bg-red-500/10"
+                }`}
+              >
+                <XCircle size={13} weight="bold" /> Faltou (Não Compareceu)
+              </Button>
+            </div>
+          </div>
+
+          {/* Abas no mobile/telas compactas */}
+          <div className="mt-2 flex md:hidden items-center gap-1 border-t border-border/50 pt-2 text-xs">
+            <button
+              type="button"
+              onClick={() => setActiveTab("chat")}
+              className={`flex items-center gap-1 rounded px-2.5 py-1 font-medium transition-colors ${
+                activeTab === "chat"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-text-muted hover:bg-muted"
+              }`}
+            >
+              <ChatCircle size={14} /> Conversa
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("dados")}
+              className={`flex items-center gap-1 rounded px-2.5 py-1 font-medium transition-colors ${
+                activeTab === "dados"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-text-muted hover:bg-muted"
+              }`}
+            >
+              <IdentificationCard size={14} /> Dados do Lead
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("timeline")}
+              className={`flex items-center gap-1 rounded px-2.5 py-1 font-medium transition-colors ${
+                activeTab === "timeline"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-text-muted hover:bg-muted"
+              }`}
+            >
+              <ClockCounterClockwise size={14} /> Linha do tempo
+            </button>
+          </div>
         </SheetHeader>
 
-        {/* ① cabeçalho vivo */}
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-border pb-3 text-xs">
-          <span className="font-medium tabular-nums text-text">
-            {formatBRL(lead.value_cents, lead.currency)}
-          </span>
-          <span className="text-text-muted">{stageName}</span>
-          <OwnerBadge
-            ownerKind={owner.kind}
-            ownerName={owner.name}
-            agentVersion={owner.agentVersion}
-          />
-          {score && (
-            // O MESMO componente do card, não uma cópia do medidor.
-            // "Superfície nova herda as decisões da antiga" só vale como
-            // mecanismo: herdar por cópia é como as duas listas do evidence —
-            // funciona hoje e diverge no mês em que alguém mudar um dos dois.
-            // De brinde, o rótulo honesto da âncora ("registro que sustenta",
-            // nunca "momento da conversa") vem junto, sem eu reescrever nada.
-            <ScoreSlot
-              probability={score.probability}
-              band={score.band}
-              reason={score.reason}
-              factors={score.factors.slice(0, 3)}
-            />
-          )}
-
-          <button
-            type="button"
-            onClick={() => campos.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-            className="ml-auto text-text-muted underline-offset-2 hover:text-text hover:underline"
+        {/* Corpo: Grade 2 Colunas no Desktop */}
+        <div className="grid flex-1 grid-cols-1 md:grid-cols-12 overflow-hidden">
+          {/* Coluna 1 (Conversa / Chat do WhatsApp) */}
+          <div
+            className={`flex flex-col border-r border-border md:col-span-6 lg:col-span-7 ${
+              activeTab === "chat" ? "flex" : "hidden md:flex"
+            }`}
           >
-            Editar campos
-          </button>
-        </div>
+            {conversationId ? (
+              <>
+                <div className="flex-1 overflow-y-auto p-4">
+                  <ChatThread conversationId={conversationId} />
+                </div>
+                <Composer conversationId={conversationId} />
+              </>
+            ) : (
+              <div className="flex flex-1 flex-col items-center justify-center p-8 text-center text-text-muted">
+                <ChatCircle size={40} className="mb-2 opacity-40" />
+                <p className="text-sm font-medium">Nenhuma conversa vinculada</p>
+                <p className="text-xs">
+                  Quando o contato responder no WhatsApp, as mensagens aparecerão aqui em tempo real.
+                </p>
+              </div>
+            )}
+          </div>
 
-        {/* O score NÃO aparece na timeline: recálculo é telemetria e não emite
-            atividade (silêncio para telemetria, pulso para mudança de estado).
-            Sem esta linha, quem visse o número mudando no cabeçalho e nunca na
-            timeline concluiria que a timeline está incompleta. */}
-        {score?.at && (
-          <p className="pt-2 text-[11px] text-text-muted">
-            Probabilidade recalculada automaticamente · {new Date(score.at).toLocaleString("pt-BR")}
-          </p>
-        )}
-
-        <ConversaNoDossie conversa={lead.conversa} />
-
-        {/* ② timeline */}
-        <section className="flex-1 py-3">
-          <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-text-muted">
-            Linha do tempo
-          </h3>
-          <LeadTimeline
-            itens={timeline.itens}
-            chegouAoVivo={timeline.chegouAoVivo}
-            isLoading={timeline.isLoading}
-            isError={timeline.isError}
-          />
-        </section>
-
-        {/* ③ campos, por último */}
-        <div ref={campos} className="border-t border-border pt-3">
-          <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-text-muted">
-            Dados do negócio
-          </h3>
-          <LeadFieldsForm lead={lead} pipelineId={pipelineId} />
+          {/* Coluna 2 (Dados do Lead e Linha do Tempo) */}
+          <div
+            ref={campos}
+            className={`flex flex-col overflow-y-auto p-4 md:col-span-6 lg:col-span-5 ${
+              activeTab === "dados" || activeTab === "timeline"
+                ? "flex"
+                : "hidden md:flex"
+            }`}
+          >
+            {activeTab === "timeline" ? (
+              <div className="space-y-4">
+                <h3 className="text-sm font-semibold text-text">Linha do Tempo</h3>
+                <LeadTimeline
+                  itens={timeline.itens}
+                  chegouAoVivo={timeline.chegouAoVivo}
+                  isLoading={timeline.isLoading}
+                  isError={timeline.isError}
+                />
+              </div>
+            ) : (
+              <LeadFieldsForm
+                lead={lead}
+                pipelineId={pipelineId}
+              />
+            )}
+          </div>
         </div>
       </SheetContent>
     </Sheet>

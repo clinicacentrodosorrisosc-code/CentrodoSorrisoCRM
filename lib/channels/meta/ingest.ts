@@ -91,10 +91,13 @@ function previewOf(e: InboundMessageEvent): string {
 export async function ingestMetaInbound(
   admin: Admin,
   e: InboundMessageEvent,
+  fallbackSession?: { id: string; organization_id: string },
 ): Promise<IngestOutcome> {
-  const sessao = await sessionByPhoneNumberId(admin, e.phoneNumberId);
-  // Sem sessão: a mensagem é de um número que não administramos. Devolver 200 (o
-  // chamador faz isso) evita a Meta re-entregar em loop algo que nunca vamos aceitar.
+  let sessao = await sessionByPhoneNumberId(admin, e.phoneNumberId);
+  if (!sessao && fallbackSession) {
+    sessao = fallbackSession;
+  }
+  // Sem sessão: a mensagem é de um número que não administramos.
   if (!sessao) return { status: "no_session" };
 
   const orgId = sessao.organization_id;

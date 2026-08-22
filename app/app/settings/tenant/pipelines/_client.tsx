@@ -8,6 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { updatePipelineConfig } from "@/app/actions/settings/updatePipelineConfig";
 import type { PipelineConfigPatch } from "@/lib/schemas/settings";
+import { Archive, Plus, Trash } from "@/lib/ui/icons";
+import { useArquivarFunil, useCriarFunil } from "@/hooks/pipelines/usePipelines";
 import { AgentMappingSection, ancoraDoMapeamento } from "./_mapping";
 import { StagesSection, ancoraDasEtapas } from "./_stages";
 
@@ -46,42 +48,123 @@ export function PipelinesClient({
   /** Vocabulário/custom fields são admin (a server action recusa o resto). */
   podeEditarConfig: boolean;
 }) {
-  if (pipelines.length === 0) {
-    // ⚠️ NÃO PROMETA UM CAMINHO QUE NÃO EXISTE. Criar funil não é feito por
-    // nenhuma tela, rota ou action deste produto — só por script de instalação;
-    // e como o instalador não provisiona funil, ESTE é o estado de toda
-    // instalação nova. O texto anterior mandava "crie um no quadro", e o quadro
-    // vazio manda "Ir para Configurações": pingue-pongue fechado, com o usuário
-    // procurando um botão que não existe em lugar nenhum.
-    return (
-      <Card className="p-6 text-sm leading-relaxed text-muted-foreground">
-        Você ainda não tem nenhum funil. Enquanto for assim, o agente atende normalmente, mas não
-        tem para onde levar o card de ninguém — não há etapas para onde mover. Criar o funil é
-        feito por quem instalou o sistema, direto no banco; depois ele aparece aqui para você
-        escolher a etapa de cada passo.
-      </Card>
+  const [novo, setNovo] = useState<string | null>(null);
+  const criar = useCriarFunil();
+  const arquivar = useArquivarFunil();
+
+  function criarNovoFunil() {
+    const nome = (novo ?? "").trim();
+    if (!nome) return;
+    criar.mutate(nome, {
+      onSuccess: () => {
+        setNovo(null);
+        toast.success(`Funil «${nome}» criado com sucesso!`);
+      },
+      onError: (err) => {
+        toast.error(err instanceof Error ? err.message : "Erro ao criar funil.");
+      },
+    });
+  }
+
+  function pedirArquivamento(id: string, definitivo: boolean) {
+    arquivar.mutate(
+      { id, definitivo },
+      {
+        onSuccess: () => {
+          toast.success(definitivo ? "Funil excluído definitivamente!" : "Funil arquivado com sucesso!");
+        },
+        onError: (err) => {
+          toast.error(err instanceof Error ? err.message : "Erro ao processar ação no funil.");
+        },
+      },
     );
   }
+
   return (
-    <div className="flex flex-col gap-4">
-      {pipelines.map((p) => (
-        <Card key={p.id} className="space-y-6 p-6">
-          <header>
-            <h2 className="text-base font-semibold">{p.name}</h2>
-            <p className="text-xs text-muted-foreground">/{p.slug}</p>
-          </header>
-          {/* As ETAPAS vêm primeiro, e a ordem é a do raciocínio de quem
-              configura: primeiro o quadro existe do jeito da sua operação,
-              depois se decide o que o assistente faz com ele. Invertido, a
-              primeira coisa que o dono da clínica vê é um mapeamento sobre
-              colunas de e-commerce que ele nem sabia que dava para trocar. */}
-          <StagesSection pipelineId={p.id} ancoraMapeamento={ancoraDoMapeamento(p.id)} />
-          <div className="border-t border-border pt-6">
-            <AgentMappingSection pipelineId={p.id} ancoraEtapas={ancoraDasEtapas(p.id)} />
+    <div className="flex flex-col gap-6">
+      {podeEditarConfig && (
+        <div className="flex justify-between items-center bg-card p-4 rounded-lg border">
+          <div>
+            <h3 className="text-sm font-medium">Gestão de Funis</h3>
+            <p className="text-xs text-muted-foreground">Crie, personalize etapas ou arquive funis da sua operação.</p>
           </div>
-          {podeEditarConfig && <PipelineEditor pipeline={p} />}
+          {novo === null ? (
+            <Button onClick={() => setNovo("")} className="gap-1.5" size="sm">
+              <Plus size={14} /> Novo Funil
+            </Button>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Input
+                autoFocus
+                placeholder="Nome do novo funil..."
+                value={novo}
+                onChange={(e) => setNovo(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") criarNovoFunil();
+                  if (e.key === "Escape") setNovo(null);
+                }}
+                className="h-8 w-60 text-sm"
+              />
+              <Button size="sm" onClick={criarNovoFunil} disabled={!novo.trim() || criar.isPending}>
+                Criar
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setNovo(null)}>
+                Cancelar
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {pipelines.length === 0 ? (
+        <Card className="p-6 text-sm leading-relaxed text-muted-foreground text-center">
+          Você não tem nenhum funil ativo no momento. Clique no botão acima para criar o seu primeiro funil.
         </Card>
-      ))}
+      ) : (
+        pipelines.map((p) => (
+          <Card key={p.id} className="space-y-6 p-6">
+            <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-4">
+              <div>
+                <h2 className="text-lg font-semibold flex items-center gap-2">
+                  {p.name}
+                  <span className="text-xs font-normal text-muted-foreground">/{p.slug}</span>
+                </h2>
+              </div>
+              {podeEditarConfig && (
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => pedirArquivamento(p.id, false)}
+                    disabled={arquivar.isPending}
+                    className="text-amber-600 hover:text-amber-700 hover:bg-amber-50 dark:hover:bg-amber-950/30 gap-1.5"
+                  >
+                    <Archive size={14} /> Arquivar Funil
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => {
+                      if (confirm(`Deseja realmente EXCLUIR DEFINITIVAMENTE o funil «${p.name}»? Esta ação não pode ser desfeita.`)) {
+                        pedirArquivamento(p.id, true);
+                      }
+                    }}
+                    disabled={arquivar.isPending}
+                    className="gap-1.5"
+                  >
+                    <Trash size={14} /> Excluir Funil
+                  </Button>
+                </div>
+              )}
+            </header>
+            <StagesSection pipelineId={p.id} ancoraMapeamento={ancoraDoMapeamento(p.id)} />
+            <div className="border-t border-border pt-6">
+              <AgentMappingSection pipelineId={p.id} ancoraEtapas={ancoraDasEtapas(p.id)} />
+            </div>
+            {podeEditarConfig && <PipelineEditor pipeline={p} />}
+          </Card>
+        ))
+      )}
     </div>
   );
 }

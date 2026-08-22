@@ -58,6 +58,8 @@ export interface FollowupJobRequest {
     purpose: "send_message" | "classify" | "plan_timing";
     /** action (mode 'ai_message') — Task 5.1: repassado ao turno pra virar o bloco de orientação. */
     prompt_hint?: string;
+    /** action (mode 'template') — nome ou id do template a disparar. */
+    template_id?: string;
     /** ai_classify — Task 5.1: classes possíveis + dica opcional pro classificador. */
     classes?: string[];
     hint?: string;
@@ -72,7 +74,7 @@ export interface FollowupJobRequest {
 export interface AdminClient {
   claimDueEnrollments(limit: number, leaseSeconds: number): Promise<EnrollmentRow[]>;
   loadFlowGraph(orgId: string, versionId: string): Promise<FlowGraph | null>;
-  loadLeadFacts(orgId: string, contactId: string): Promise<{ lead_stage: string | null; tags: string[] }>;
+  loadLeadFacts(orgId: string, contactId: string): Promise<{ lead_stage: string | null; tags: string[]; custom_fields?: Record<string, unknown> | null }>;
   loadEnrollmentEvents(enrollmentId: string): Promise<EnrollmentEventRef[]>;
   /** Inserts the step's audit event; `inserted:false` means idempotency_key already existed (23505 replay). */
   insertEnrollmentEvent(event: {
@@ -167,8 +169,13 @@ function eventPayload(result: NodeResult): Record<string, unknown> {
  * fazer; sem isso o job só teria os 3 campos genéricos (enrollment/node/purpose).
  */
 function turnPayloadExtras(node: FlowNode, smartWaits: EsperaAdaptativa[]): Partial<FollowupJobRequest["payload"]> {
-  if (node.type === "action" && node.config.mode === "ai_message") {
-    return { prompt_hint: node.config.prompt_hint };
+  if (node.type === "action") {
+    if (node.config.mode === "ai_message") {
+      return { prompt_hint: node.config.prompt_hint };
+    }
+    if (node.config.mode === "template") {
+      return { template_id: node.config.template_id };
+    }
   }
   if (node.type === "ai_classify") {
     return { classes: node.config.classes, ...(node.config.hint !== undefined ? { hint: node.config.hint } : {}) };
@@ -377,6 +384,7 @@ async function processEnrollment(deps: TickDeps, enrollment: EnrollmentRow, summ
     tags: leadRow.tags,
     steps_taken: enrollment.steps_taken,
     last_outcome: null, // onda 5: ai_classify ainda não persiste resultado pra condicionar
+    custom_fields: leadRow.custom_fields ?? null,
   };
 
   let waitElapsed: boolean | undefined;
@@ -507,14 +515,18 @@ export function createSupabaseAdminClient(admin: SupabaseClient): AdminClient {
     async loadLeadFacts(orgId, contactId) {
       const { data, error } = await admin
         .from("crm_leads")
-        .select("stage_id, tags")
+        .select("stage_id, tags, custom_fields")
         .eq("organization_id", orgId)
         .eq("contact_id", contactId)
         .order("updated_at", { ascending: false })
         .limit(1)
         .maybeSingle();
       if (error) throw new Error(error.message);
-      return { lead_stage: data?.stage_id ?? null, tags: data?.tags ?? [] };
+      return {
+        lead_stage: data?.stage_id ?? null,
+        tags: data?.tags ?? [],
+        custom_fields: (data?.custom_fields as Record<string, unknown>) ?? null,
+      };
     },
     async loadEnrollmentEvents(enrollmentId) {
       const { data, error } = await admin

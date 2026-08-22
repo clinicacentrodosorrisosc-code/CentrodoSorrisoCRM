@@ -8,7 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ApiError } from "@/lib/api/types";
-import { Archive, CaretDown, CaretUp, Check, PencilSimple, Plus } from "@/lib/ui/icons";
+import { Archive, CaretDown, CaretUp, Check, PencilSimple, Plus, Trash } from "@/lib/ui/icons";
+import { toast } from "sonner";
 import { useArquivarFunil, useCriarFunil, useEditarFunil } from "@/hooks/pipelines/usePipelines";
 
 export interface FunilDaLista {
@@ -98,8 +99,13 @@ export function FunisClient({
       onSuccess: (r) => {
         setFunis(r.data.pipelines);
         setNovo(null);
+        toast.success(`Funil «${nome}» criado com sucesso!`);
       },
-      onError: (e) => setErro({ id: null, texto: textoDoErro(e) }),
+      onError: (e) => {
+        const msg = textoDoErro(e);
+        setErro({ id: null, texto: msg });
+        toast.error(msg);
+      },
     });
   }
 
@@ -111,8 +117,13 @@ export function FunisClient({
         onSuccess: (r) => {
           setFunis(r.data.pipelines);
           setRenomeando(null);
+          toast.success("Funil atualizado com sucesso!");
         },
-        onError: (e) => setErro({ id, texto: textoDoErro(e) }),
+        onError: (e) => {
+          const msg = textoDoErro(e);
+          setErro({ id, texto: msg });
+          toast.error(msg);
+        },
       },
     );
   }
@@ -125,10 +136,13 @@ export function FunisClient({
         onSuccess: (r) => {
           setFunis(r.data.pipelines);
           setArquivando(null);
+          toast.success(definitivo ? "Funil excluído definitivamente!" : "Funil arquivado com sucesso!");
         },
-        // A recusa fica NO PAINEL, não numa faixa longe do botão: ela é a
-        // resposta à pergunta que o usuário acabou de fazer.
-        onError: (e) => setArquivando({ id, erro: textoDoErro(e) }),
+        onError: (e) => {
+          const msg = textoDoErro(e);
+          setArquivando({ id, erro: msg });
+          toast.error(msg);
+        },
       },
     );
   }
@@ -335,43 +349,37 @@ export function FunisClient({
               )}
 
               {arquivandoAqui && (
-                <Card className="space-y-3 p-4" data-testid={`arquivar-painel-${funil.id}`}>
+                <Card className="space-y-3 p-4 border-amber-500/30 bg-amber-500/5 dark:bg-amber-950/20" data-testid={`arquivar-painel-${funil.id}`}>
                   {arquivandoAqui.erro ? (
-                    // A recusa da rota, INTEIRA: é ela que diz qual formulário ou
-                    // automação está no caminho, e o que fazer antes de tentar de novo.
-                    <p className="text-sm leading-relaxed" data-testid={`arquivar-erro-${funil.id}`}>
+                    <p className="text-sm font-medium leading-relaxed text-destructive" data-testid={`arquivar-erro-${funil.id}`}>
                       {arquivandoAqui.erro}
                     </p>
                   ) : (
-                    <p className="text-sm leading-relaxed">
-                      Arquivar «{funil.name}»? Ele sai desta lista e para de receber negócio novo. O
-                      histórico continua guardado, e nada é apagado.
+                    <p className="text-sm leading-relaxed text-foreground">
+                      Tem certeza que deseja gerenciar o funil <strong>«{funil.name}»</strong>? Escolha se deseja apenas arquivá-lo ou excluí-lo definitivamente:
                     </p>
                   )}
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-2 pt-1">
                     <Button
                       size="sm"
                       onClick={() => pedirArquivamento(funil.id, false)}
                       disabled={ocupado}
+                      className="bg-amber-600 hover:bg-amber-700 text-white gap-1.5"
                       data-testid={`arquivar-confirmar-${funil.id}`}
                     >
-                      Arquivar
+                      <Archive size={14} /> Arquivar Funil
                     </Button>
-                    {/* Excluir de vez só passa no funil que NUNCA recebeu negócio.
-                        A tela não sabe disso antes de perguntar — e não precisa
-                        saber: a rota recusa explicando, e a explicação aparece
-                        aqui mesmo. Fazer a tela adivinhar exigiria uma segunda
-                        contagem, que discordaria da do servidor. */}
                     <Button
-                      variant="ghost"
+                      variant="destructive"
                       size="sm"
                       onClick={() => pedirArquivamento(funil.id, true)}
                       disabled={ocupado}
+                      className="gap-1.5"
                       data-testid={`excluir-${funil.id}`}
                     >
-                      Excluir de vez
+                      <Trash size={14} /> Excluir Definitivamente
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={() => setArquivando(null)} disabled={ocupado}>
+                    <Button variant="outline" size="sm" onClick={() => setArquivando(null)} disabled={ocupado}>
                       Cancelar
                     </Button>
                   </div>

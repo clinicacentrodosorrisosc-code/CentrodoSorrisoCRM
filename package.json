@@ -7,11 +7,11 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "next dev",
-    "dev:webpack": "next dev",
+    "dev": "next dev -p 3001",
+    "dev:webpack": "next dev -p 3001",
     "build": "next build",
     "build:webpack": "next build",
-    "start": "next start",
+    "start": "next start -p 3001",
     "lint": "eslint .",
     "format": "prettier --write \"**/*.{ts,tsx,md,json,css}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,md,json,css}\"",

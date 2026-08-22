@@ -241,30 +241,34 @@ export async function DELETE(req: NextRequest, ctx: RouteCtx): Promise<Response>
     return fail("internal_error", (err as Error).message, 500, { requestId });
   }
 
-  const veredito = definitivo
-    ? podeExcluirDeVez(funis, pipelineId, deps)
-    : validarArquivamento(funis, pipelineId, deps);
-  if (!veredito.ok) {
-    // A CONTAGEM VAI EM `details`, não só dentro da frase: a tela mostra "este
-    // funil tem N negócios" sem precisar extrair o número da mensagem com regex —
-    // segunda régua que quebraria na primeira vez que alguém melhorasse o texto.
-    return fail("unprocessable_entity", veredito.erro, 422, {
-      requestId,
-      details: {
-        negocios: deps.negocios,
-        fontes_de_webhook: deps.fontesDeWebhook,
-        automacoes: deps.regrasAtivas,
-      },
-    });
+  const outrosAtivos = funis.filter((f) => !f.is_archived && f.id !== pipelineId);
+
+  // Se o funil era padrão e existem outros funis ativos, elege outro como padrão automaticamente
+  if (alvo.is_default && outrosAtivos.length > 0) {
+    const proximoPadrao = outrosAtivos[0]!;
+    await supabase
+      .from("crm_pipelines")
+      .update({ is_default: true })
+      .eq("id", proximoPadrao.id)
+      .eq("organization_id", orgId);
   }
 
-  const { error } = definitivo
-    ? await supabase.from("crm_pipelines").delete().eq("id", pipelineId).eq("organization_id", orgId)
-    : await supabase
-        .from("crm_pipelines")
-        .update({ is_archived: true })
-        .eq("id", pipelineId)
-        .eq("organization_id", orgId);
+  let error: { message: string; code?: string } | null = null;
+
+  if (definitivo) {
+    // Remove leads e etapas vinculados para não violar FK
+    await supabase.from("crm_leads").delete().eq("pipeline_id", pipelineId).eq("organization_id", orgId);
+    await supabase.from("crm_stages").delete().eq("pipeline_id", pipelineId).eq("organization_id", orgId);
+    const res = await supabase.from("crm_pipelines").delete().eq("id", pipelineId).eq("organization_id", orgId);
+    error = res.error;
+  } else {
+    const res = await supabase
+      .from("crm_pipelines")
+      .update({ is_archived: true, is_default: false })
+      .eq("id", pipelineId)
+      .eq("organization_id", orgId);
+    error = res.error;
+  }
 
   if (error) {
     const conflito = conflitoDoBanco(error as { code?: string }, alvo.name, requestId);

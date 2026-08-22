@@ -404,6 +404,7 @@ export const ALVOS_DA_CLASSIFICACAO: Record<AlvoDaClassificacao, string> = {
 export const MODOS_DE_ESPERA: Record<ModoDeEspera, string> = {
   fixed: "Tempo fixo",
   smart: "A IA escolhe a hora",
+  before_appointment: "Antes do Agendamento (Lembrete de Consulta)",
 };
 
 export const MODOS_DA_ACAO: Record<ModoDaAcao, string> = {

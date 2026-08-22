@@ -56,13 +56,45 @@ export function CanalOficialClient() {
 
   const estado = data?.data;
 
+  // Pré-preenche WABA e Phone Number ID se já existirem no canal conectado
+  if (estado && !form.phone_number_id && !form.waba_id && (estado.phoneNumberId || estado.wabaId)) {
+    if (estado.phoneNumberId || estado.wabaId) {
+      setForm((f) => ({
+        ...f,
+        phone_number_id: f.phone_number_id || estado.phoneNumberId || "",
+        waba_id: f.waba_id || estado.wabaId || "",
+      }));
+    }
+  }
+
   async function enviar(e: React.FormEvent) {
     e.preventDefault();
-    const r = await conectar.mutateAsync(form);
-    toast.success(`Conectado: ${r.data.displayName} ${r.data.phoneNumber ?? ""}`.trim());
-    // O token some do formulário assim que grava — deixá-lo na tela seria mantê-lo
-    // em memória do navegador sem motivo, e ele não volta em nenhum GET.
-    setForm((f) => ({ ...f, token: "" }));
+    const payload = {
+      phone_number_id: form.phone_number_id.trim(),
+      waba_id: form.waba_id.trim(),
+      token: form.token.trim(),
+    };
+
+    if (!payload.phone_number_id) {
+      toast.error("Preencha o ID do número de telefone");
+      return;
+    }
+    if (!payload.waba_id) {
+      toast.error("Preencha o ID da conta do WhatsApp Business");
+      return;
+    }
+    if (!payload.token) {
+      toast.error("Preencha o Token de acesso da Meta");
+      return;
+    }
+
+    try {
+      const r = await conectar.mutateAsync(payload);
+      toast.success(`Conectado com sucesso: ${r.data.displayName} ${r.data.phoneNumber ?? ""}`.trim());
+      setForm((f) => ({ ...f, token: "" }));
+    } catch {
+      // showApiError handles toast
+    }
   }
 
   if (isPending) return <p className="text-sm text-muted-foreground">Carregando…</p>;

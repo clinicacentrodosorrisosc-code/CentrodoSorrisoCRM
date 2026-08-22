@@ -20,6 +20,7 @@ import { normalizeRejectedReason } from "@/lib/channels/meta/webhook";
 import { deriveTemplateContract, describeAddress } from "@/lib/channels/meta/template-contract";
 import { syncTemplates } from "@/lib/channels/meta/template-sync";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { decryptWebhookSecret } from "@/lib/webhooks/secrets";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -79,10 +80,10 @@ type OrgGate =
 async function orgOrFail(requestId: string): Promise<OrgGate> {
   const user = await requireAuth();
   const activeOrg = await resolveActiveOrg(user);
-  if (!activeOrg || ROLE_RANK[activeOrg.role] < ROLE_RANK.admin) {
+  if (!activeOrg || ROLE_RANK[activeOrg.role] < ROLE_RANK.manager) {
     return {
       autorizado: false,
-      resposta: fail("forbidden", "admin_required", 403, { requestId }),
+      resposta: fail("forbidden", "manager_required", 403, { requestId }),
     };
   }
   return { autorizado: true, orgId: activeOrg.orgId };
@@ -162,8 +163,20 @@ export async function POST(_req: NextRequest): Promise<NextResponse> {
     return fail("invalid_request", "no_meta_channel", 400, { requestId });
   }
 
-  const token = process.env.META_SYSTEM_USER_TOKEN ?? "";
-  if (!token) return fail("invalid_request", "missing_meta_token", 400, { requestId });
+  let token = process.env.META_SYSTEM_USER_TOKEN ?? "";
+  if (!token && sessao.tokenEncrypted) {
+    const admin = createAdminClient();
+    token = (await decryptWebhookSecret(admin, sessao.tokenEncrypted)) ?? "";
+  }
+
+  if (!token) {
+    return fail(
+      "invalid_request",
+      "Token de acesso da Meta não encontrado. Conecte o canal oficial primeiro.",
+      400,
+      { requestId },
+    );
+  }
 
   try {
     const counts = await syncTemplates({

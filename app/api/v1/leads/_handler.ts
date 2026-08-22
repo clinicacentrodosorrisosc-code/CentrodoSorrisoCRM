@@ -397,6 +397,12 @@ export async function updateLeadHandler(
     patch.expected_close_date = input.expected_close_date;
   }
   if (input.tags !== undefined) patch.tags = input.tags;
+  if (input.source !== undefined) patch.source = input.source;
+  if (input.custom_fields !== undefined) {
+    // Mescla custom_fields existentes com novos para não apagar campos anteriores
+    const existingCustom = (existing as { custom_fields?: Record<string, unknown> })?.custom_fields ?? {};
+    patch.custom_fields = { ...existingCustom, ...input.custom_fields };
+  }
 
   // O filtro entra AQUI TAMBÉM, e não só no SELECT acima: entre ler e escrever
   // há uma janela, e defesa que depende de uma leitura anterior é defesa que
@@ -580,12 +586,24 @@ export async function moveLeadHandler(
     position = maxRow?.position_in_stage ? Number(maxRow.position_in_stage) + 1000 : 1000;
   }
 
+  const isNoShowStage = /n[aã]o\s*compareceu|faltou|no[-\s]?show/i.test(stage.name);
+  const isAttendedStage = /compareceu|atendido|avaliado|avalia[cç][aã]o\s*realizada/i.test(stage.name);
+
+  const customFields = (lead.custom_fields ?? {}) as Record<string, unknown>;
+  let nextCustomFields = customFields;
+  if (isNoShowStage && customFields.agendamento_status !== "faltou") {
+    nextCustomFields = { ...customFields, agendamento_status: "faltou" };
+  } else if (isAttendedStage && customFields.agendamento_status !== "compareceu") {
+    nextCustomFields = { ...customFields, agendamento_status: "compareceu" };
+  }
+
   const nowIso = new Date().toISOString();
   const { data: updated, error: updErr } = await supabase
     .from("crm_leads")
     .update({
       stage_id: input.to_stage_id,
       position_in_stage: position,
+      custom_fields: nextCustomFields,
       updated_at: nowIso,
     })
     .eq("id", leadId)
@@ -761,6 +779,9 @@ export async function moveLeadHandler(
       ...(input.reason ? { reason: input.reason } : {}),
     },
   });
+
+  const { triggerImmediateFollowupProcessing } = await import("@/lib/followup/instant-trigger");
+  void triggerImmediateFollowupProcessing(lead.organization_id);
 
   return finalLead;
 }

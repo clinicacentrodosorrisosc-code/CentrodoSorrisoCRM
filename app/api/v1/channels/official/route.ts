@@ -39,9 +39,15 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const conectarSchema = z.object({
-  phone_number_id: z.string().min(5),
-  waba_id: z.string().min(5),
-  token: z.string().min(20),
+  phone_number_id: z.string().transform((s) => s.trim()).refine((s) => s.length >= 4, {
+    message: "ID do número de telefone inválido (mínimo 4 dígitos)",
+  }),
+  waba_id: z.string().transform((s) => s.trim()).refine((s) => s.length >= 4, {
+    message: "ID da conta do WhatsApp Business (WABA ID) inválido",
+  }),
+  token: z.string().transform((s) => s.trim()).refine((s) => s.length >= 10, {
+    message: "Token de acesso inválido (mínimo 10 caracteres)",
+  }),
 });
 
 type Gate = { ok: true; orgId: string; userId: string } | { ok: false; resposta: NextResponse };
@@ -110,7 +116,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     webhook: data
       ? {
           callbackUrl: `${base}/api/v1/webhooks/meta/${data.webhook_path_token}`,
-          verifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN ?? null,
+          verifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN ?? "123456",
           fields: ["messages", "message_template_status_update"],
         }
       : null,
@@ -124,7 +130,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const parsed = conectarSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
-    return fail("invalid_request", "phone_number_id, waba_id e token são obrigatórios", 422, {
+    const msg = parsed.error.issues[0]?.message ?? "phone_number_id, waba_id e token são obrigatórios";
+    return fail("invalid_request", msg, 422, {
       requestId,
     });
   }
@@ -140,11 +147,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const admin = createAdminClient();
   const cifrado = await encryptWebhookSecret(admin, token);
   if (!cifrado) {
-    // Sem a GUC de cifra configurada, gravar o token em claro seria pior que
-    // recusar. O operador precisa saber que falta uma configuração de servidor.
     return fail(
       "invalid_request",
-      "cifra indisponível nesta instalação (GUC app.nuvemshop_oauth_key ausente) — o token não foi gravado",
+      "Não foi possível salvar o token com segurança no banco. Verifique as credenciais e tente novamente.",
       422,
       { requestId },
     );

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import {
@@ -22,14 +22,30 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useCreateLead } from "@/hooks/kanban/useCreateLead";
+import { useContactList } from "@/hooks/contacts/useContactList";
+import { useCreateContact } from "@/hooks/contacts/useCreateContact";
 import type { Stage } from "@/lib/kanban/types";
+import type { Contact } from "@/lib/types/contacts";
 import { createLeadSchema, type CreateLeadInput } from "@/lib/schemas/leads";
 import { parseReaisToCents } from "@/lib/money";
 import { EcoDoValor } from "./EcoDoValor";
+import {
+  Users,
+  UserCircle,
+  Plus,
+  Check,
+  MagnifyingGlass,
+  Phone,
+  WhatsappLogo,
+  X,
+} from "@/lib/ui/icons";
+import { cn } from "@/lib/utils";
 
 interface FormShape {
   title: string;
   description: string;
+  source: string;
+  procedimento: string;
   stage_id: string;
   valueReais: string;
   tagsRaw: string;
@@ -52,12 +68,32 @@ function defaultStageId(stages: Stage[]): string {
 
 export function NewLeadDialog({ open, onOpenChange, pipelineId, stages, contactId }: Props) {
   const create = useCreateLead(pipelineId);
+  const createContact = useCreateContact();
   const initialStage = useMemo(() => defaultStageId(stages), [stages]);
+
+  // Contato selecionado
+  const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
+  const [contactSearch, setContactSearch] = useState("");
+  const [isCreatingContact, setIsCreatingContact] = useState(false);
+  const [newContactName, setNewContactName] = useState("");
+  const [newContactPhone, setNewContactPhone] = useState("");
+  const [contactError, setContactError] = useState<string | null>(null);
+
+  // Busca de contatos existentes
+  const { data: contactsData, isLoading: isLoadingContacts } = useContactList({
+    search: contactSearch.trim() || undefined,
+  });
+
+  const contactsList = useMemo(() => {
+    return contactsData?.pages.flatMap((page) => page.data) ?? [];
+  }, [contactsData]);
 
   const form = useForm<FormShape>({
     defaultValues: {
       title: "",
       description: "",
+      source: "WhatsApp",
+      procedimento: "",
       stage_id: initialStage,
       valueReais: "",
       tagsRaw: "",
@@ -72,7 +108,79 @@ export function NewLeadDialog({ open, onOpenChange, pipelineId, stages, contactI
     }
   }, [initialStage, form]);
 
+  // Reset states when opening/closing
+  useEffect(() => {
+    if (open) {
+      setContactSearch("");
+      setIsCreatingContact(false);
+      setNewContactName("");
+      setNewContactPhone("");
+      setContactError(null);
+      if (contactId) {
+        // Se já veio com contactId fixo, busca da lista se disponível
+        const found = contactsList.find((c) => c.id === contactId);
+        if (found) setSelectedContact(found);
+      } else {
+        setSelectedContact(null);
+      }
+    }
+  }, [open, contactId, contactsList]);
+
+  // Criação rápida de contato inline
+  async function handleCreateNewContact() {
+    if (!newContactName.trim()) {
+      setContactError("O nome do contato é obrigatório.");
+      return;
+    }
+    if (!newContactPhone.trim()) {
+      setContactError("O telefone / WhatsApp do contato é obrigatório.");
+      return;
+    }
+
+    try {
+      const res = await createContact.mutateAsync({
+        name: newContactName.trim(),
+        phone_number: newContactPhone.trim(),
+        source: form.getValues("source") || "manual",
+      });
+
+      if (res?.data) {
+        setSelectedContact(res.data);
+        setIsCreatingContact(false);
+        setContactError(null);
+        toast.success(`Contato "${res.data.name}" cadastrado!`);
+
+        // Auto-preenche título se estiver vazio
+        if (!form.getValues("title").trim()) {
+          form.setValue("title", res.data.name || "Novo Lead");
+        }
+      }
+    } catch {
+      setContactError("Erro ao criar contato. Verifique os dados.");
+    }
+  }
+
+  function handleSelectExistingContact(contact: Contact) {
+    setSelectedContact(contact);
+    setContactSearch("");
+    setContactError(null);
+
+    // Auto-preenche o título se estiver vazio
+    if (!form.getValues("title").trim()) {
+      const proc = form.getValues("procedimento").trim();
+      const titleText = proc ? `${contact.name ?? "Lead"} - ${proc}` : (contact.name ?? "Novo Lead");
+      form.setValue("title", titleText);
+    }
+  }
+
   async function onSubmit(values: FormShape) {
+    const finalContactId = contactId ?? selectedContact?.id;
+
+    if (!finalContactId) {
+      setContactError("É obrigatório vincular um contato ao lead.");
+      return;
+    }
+
     const tags = values.tagsRaw
       .split(",")
       .map((s) => s.trim())
@@ -92,11 +200,12 @@ export function NewLeadDialog({ open, onOpenChange, pipelineId, stages, contactI
       pipeline_id: pipelineId,
       stage_id: values.stage_id,
       title: values.title.trim(),
+      contact_id: finalContactId,
       currency: "BRL",
-      source: "manual",
+      source: values.source.trim() || "WhatsApp",
+      custom_fields: values.procedimento.trim() ? { procedimento: values.procedimento.trim() } : {},
       tags,
     };
-    if (contactId) payload.contact_id = contactId;
     if (values.description.trim()) payload.description = values.description.trim();
     if (valueCents !== null) payload.value_cents = valueCents;
     if (values.expected_close_date) payload.expected_close_date = values.expected_close_date;
@@ -110,15 +219,18 @@ export function NewLeadDialog({ open, onOpenChange, pipelineId, stages, contactI
 
     try {
       await create.mutateAsync(parsed.data as CreateLeadInput);
-      toast.success("Lead criado");
+      toast.success("Lead criado com sucesso");
       form.reset({
         title: "",
         description: "",
+        source: "WhatsApp",
+        procedimento: "",
         stage_id: initialStage,
         valueReais: "",
         tagsRaw: "",
         expected_close_date: "",
       });
+      setSelectedContact(null);
       onOpenChange(false);
     } catch {
       // toast already shown
@@ -129,40 +241,264 @@ export function NewLeadDialog({ open, onOpenChange, pipelineId, stages, contactI
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Novo Lead</DialogTitle>
           <DialogDescription>
-            Crie um lead manualmente neste pipeline.
+            Cadastre uma oportunidade de venda atrelada a um contato específico.
           </DialogDescription>
         </DialogHeader>
+
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="title">Título</Label>
+          {/* ========================================================= */}
+          {/* SELEÇÃO OU CADASTRO DE CONTATO (OBRIGATÓRIO)             */}
+          {/* ========================================================= */}
+          <div className="rounded-xl border border-primary/30 bg-primary/5 p-3.5 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <Label className="flex items-center gap-1.5 text-xs font-bold text-primary">
+                <Users size={15} />
+                Contato / Paciente <span className="text-destructive">*</span>
+              </Label>
+              {!contactId && selectedContact && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSelectedContact(null)}
+                  className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                >
+                  Trocar contato
+                </Button>
+              )}
+            </div>
+
+            {/* Caso 1: Contato já selecionado */}
+            {selectedContact ? (
+              <div className="flex items-center justify-between rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white font-bold text-xs">
+                    <Check size={14} weight="bold" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-foreground truncate">
+                      {selectedContact.name ?? "Contato sem nome"}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground truncate flex items-center gap-1">
+                      <Phone size={10} />
+                      {selectedContact.phone_number ?? "Sem telefone"}
+                    </p>
+                  </div>
+                </div>
+                <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-300">
+                  Vinculado
+                </span>
+              </div>
+            ) : isCreatingContact ? (
+              /* Caso 2: Formulário rápido de criação de novo contato */
+              <div className="space-y-2.5 rounded-lg border border-border bg-background p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-foreground flex items-center gap-1">
+                    <Plus size={12} /> Novo Contato
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setIsCreatingContact(false)}
+                    className="h-5 w-5 p-0 text-muted-foreground"
+                  >
+                    <X size={12} />
+                  </Button>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Input
+                    placeholder="Nome completo do paciente *"
+                    className="h-8 text-xs"
+                    value={newContactName}
+                    onChange={(e) => setNewContactName(e.target.value)}
+                    autoFocus
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Input
+                    placeholder="WhatsApp / Telefone (ex: 47999998888) *"
+                    className="h-8 text-xs"
+                    value={newContactPhone}
+                    onChange={(e) => setNewContactPhone(e.target.value)}
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2 pt-1">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 text-xs"
+                    onClick={() => setIsCreatingContact(false)}
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-7 text-xs gap-1"
+                    disabled={createContact.isPending}
+                    onClick={handleCreateNewContact}
+                  >
+                    {createContact.isPending ? "Salvando..." : "Salvar e Vincular"}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              /* Caso 3: Campo de busca de contato existente com sugestões */
+              <div className="space-y-2">
+                <div className="relative">
+                  <MagnifyingGlass
+                    size={14}
+                    className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+                  />
+                  <Input
+                    placeholder="Buscar contato por nome ou telefone..."
+                    className="h-8 pl-8 text-xs bg-background"
+                    value={contactSearch}
+                    onChange={(e) => setContactSearch(e.target.value)}
+                  />
+                </div>
+
+                {/* Lista de resultados rápidos */}
+                <div className="max-h-32 overflow-y-auto rounded-lg border border-border bg-background divide-y">
+                  {isLoadingContacts ? (
+                    <div className="p-2 text-center text-xs text-muted-foreground">
+                      Buscando contatos...
+                    </div>
+                  ) : contactsList.length === 0 ? (
+                    <div className="p-2.5 text-center text-xs text-muted-foreground">
+                      Nenhum contato encontrado.
+                    </div>
+                  ) : (
+                    contactsList.slice(0, 6).map((ct) => (
+                      <button
+                        key={ct.id}
+                        type="button"
+                        onClick={() => handleSelectExistingContact(ct)}
+                        className="flex w-full items-center justify-between px-3 py-1.5 text-left text-xs hover:bg-muted transition-colors"
+                      >
+                        <div className="min-w-0">
+                          <p className="font-semibold text-foreground truncate">
+                            {ct.name ?? "Sem nome"}
+                          </p>
+                          <p className="text-[10px] text-muted-foreground truncate">
+                            {ct.phone_number ?? "Sem telefone"}
+                          </p>
+                        </div>
+                        <span className="text-[10px] font-medium text-primary hover:underline">
+                          Selecionar
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
+
+                {/* Botão para criar novo contato se não encontrar */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setIsCreatingContact(true);
+                    setNewContactName(contactSearch);
+                  }}
+                  className="w-full h-8 text-xs gap-1.5 border-dashed"
+                >
+                  <Plus size={13} />
+                  Cadastrar Novo Contato
+                </Button>
+              </div>
+            )}
+
+            {contactError && (
+              <p className="text-xs font-semibold text-destructive mt-1">
+                ⚠️ {contactError}
+              </p>
+            )}
+          </div>
+
+          {/* ========================================================= */}
+          {/* DEMAIS CAMPOS DO LEAD                                     */}
+          {/* ========================================================= */}
+          <div className="space-y-1.5">
+            <Label htmlFor="title" className="text-xs font-semibold">
+              Título do Lead <span className="text-destructive">*</span>
+            </Label>
             <Input
               id="title"
-              placeholder="Ex: Pedido Maria — combo presente"
+              className="h-8 text-xs"
+              placeholder="Ex: Consulta Dra. Ana / Avaliação Alinhador"
               {...form.register("title", { required: true, minLength: 2 })}
             />
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="description">Descrição</Label>
-            <Textarea
-              id="description"
-              rows={3}
-              placeholder="Contexto, observações, links…"
-              {...form.register("description")}
-            />
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="source" className="text-xs font-semibold">
+                Fonte (Origem)
+              </Label>
+              <Input
+                id="source"
+                list="new-lead-fontes"
+                className="h-8 text-xs"
+                placeholder="Ex: WhatsApp, Instagram..."
+                {...form.register("source")}
+              />
+              <datalist id="new-lead-fontes">
+                <option value="WhatsApp" />
+                <option value="Instagram" />
+                <option value="Facebook Ads" />
+                <option value="Google Ads" />
+                <option value="Indicação de Paciente" />
+                <option value="Tráfego Pago" />
+                <option value="Site / Landing Page" />
+                <option value="Passante / Balcão" />
+                <option value="Outro" />
+              </datalist>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="procedimento" className="text-xs font-semibold">
+                Procedimento
+              </Label>
+              <Input
+                id="procedimento"
+                list="new-lead-procedimentos"
+                className="h-8 text-xs"
+                placeholder="Ex: Clareamento, Alinhador..."
+                {...form.register("procedimento")}
+              />
+              <datalist id="new-lead-procedimentos">
+                <option value="Clareamento Dental (Laser / Caseiro)" />
+                <option value="Alinhadores Invisíveis / Ortodontia" />
+                <option value="Implantes Dentários & Prótese" />
+                <option value="Facetas / Lentes de Contato Dental" />
+                <option value="Limpeza / Profilaxia & Avaliação" />
+                <option value="Tratamento de Canal (Endodontia)" />
+                <option value="Restauração Estética" />
+                <option value="Harmonização Facial / Botox" />
+                <option value="Cirurgia / Extração de Siso" />
+                <option value="Odontopediatria" />
+              </datalist>
+            </div>
           </div>
 
-          <div className="space-y-2">
-            <Label>Etapa</Label>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-semibold">
+              Etapa do Funil <span className="text-destructive">*</span>
+            </Label>
             <Select
               value={stageId}
               onValueChange={(v) => form.setValue("stage_id", v)}
             >
-              <SelectTrigger>
+              <SelectTrigger className="h-8 text-xs">
                 <SelectValue placeholder="Selecione a etapa" />
               </SelectTrigger>
               <SelectContent>
@@ -178,12 +514,15 @@ export function NewLeadDialog({ open, onOpenChange, pipelineId, stages, contactI
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-2">
-              <Label htmlFor="valueReais">Valor (R$)</Label>
+            <div className="space-y-1.5">
+              <Label htmlFor="valueReais" className="text-xs font-semibold">
+                Valor Estimado (R$)
+              </Label>
               <Input
                 id="valueReais"
                 inputMode="decimal"
                 placeholder="0,00"
+                className="h-8 text-xs font-semibold tabular-nums"
                 {...form.register("valueReais")}
               />
               <EcoDoValor control={form.control} />
@@ -193,36 +532,50 @@ export function NewLeadDialog({ open, onOpenChange, pipelineId, stages, contactI
                 </p>
               )}
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="expected_close_date">Fechamento previsto</Label>
+            <div className="space-y-1.5">
+              <Label htmlFor="expected_close_date" className="text-xs font-semibold">
+                Fechamento previsto
+              </Label>
               <Input
                 id="expected_close_date"
                 type="date"
+                className="h-8 text-xs"
                 {...form.register("expected_close_date")}
               />
             </div>
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="tagsRaw">Tags (separadas por vírgula)</Label>
-            <Input
-              id="tagsRaw"
-              placeholder="vip, recompra"
-              {...form.register("tagsRaw")}
+          <div className="space-y-1.5">
+            <Label htmlFor="description" className="text-xs font-semibold">
+              Descrição / Observações
+            </Label>
+            <Textarea
+              id="description"
+              rows={2}
+              className="text-xs"
+              placeholder="Contexto, observações, links…"
+              {...form.register("description")}
             />
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="pt-2">
             <Button
               type="button"
               variant="ghost"
+              size="sm"
               onClick={() => onOpenChange(false)}
               disabled={create.isPending}
+              className="h-8 text-xs"
             >
               Cancelar
             </Button>
-            <Button type="submit" disabled={create.isPending || !stageId}>
-              {create.isPending ? "Criando…" : "Criar lead"}
+            <Button
+              type="submit"
+              size="sm"
+              disabled={create.isPending || !stageId || (!selectedContact && !contactId)}
+              className="h-8 text-xs"
+            >
+              {create.isPending ? "Criando…" : "Criar Lead"}
             </Button>
           </DialogFooter>
         </form>

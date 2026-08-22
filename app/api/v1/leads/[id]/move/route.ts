@@ -83,12 +83,26 @@ export async function POST(
     );
   }
 
+  // Sincronização automática do agendamento quando o lead é movido de etapa
+  const targetName = stage?.name ?? "";
+  const isNoShowStage = /n[aã]o\s*compareceu|faltou|no[-\s]?show/i.test(targetName);
+  const isAttendedStage = /compareceu|atendido|avaliado|avalia[cç][aã]o\s*realizada/i.test(targetName);
+
+  const customFields = (lead.custom_fields ?? {}) as Record<string, unknown>;
+  let nextCustomFields = customFields;
+  if (isNoShowStage && customFields.agendamento_status !== "faltou") {
+    nextCustomFields = { ...customFields, agendamento_status: "faltou" };
+  } else if (isAttendedStage && customFields.agendamento_status !== "compareceu") {
+    nextCustomFields = { ...customFields, agendamento_status: "compareceu" };
+  }
+
   // OCC update (Pattern B / Spec 09 §7.2).
   const { data: updated, error: updErr } = await supabase
     .from("crm_leads")
     .update({
       stage_id: input.stage_id,
       position_in_stage: input.position_in_stage,
+      custom_fields: nextCustomFields,
       updated_at: new Date().toISOString(),
     })
     .eq("id", leadId)
@@ -197,6 +211,10 @@ export async function POST(
       position_in_stage: input.position_in_stage,
     },
   });
+
+  // Dispara o processamento imediato de follow-up sem esperar por crons
+  const { triggerImmediateFollowupProcessing } = await import("@/lib/followup/instant-trigger");
+  void triggerImmediateFollowupProcessing(lead.organization_id);
 
   return ok(finalLead, { requestId });
 }

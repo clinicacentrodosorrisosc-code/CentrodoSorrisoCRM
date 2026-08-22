@@ -8,6 +8,7 @@ import {
   Buildings,
   ChartBar,
   ChartLineUp,
+  CheckSquare,
   ClipboardText,
   ClockCountdown,
   ClockCounterClockwise,
@@ -136,6 +137,14 @@ export const GRUPO_NO_RODAPE: NavGroupId = "organizacao";
 export const NAV_DESTINATIONS: NavDestination[] = [
   // ---- Atendimento — onde o operador passa o dia ----
   {
+    href: "/app/dashboard",
+    label: "Dashboard",
+    description: "Visão geral da operação: conversas ativas, contatos, volume de negócios e tempo de resposta.",
+    icon: Gauge,
+    group: "atendimento",
+    sidebar: true,
+  },
+  {
     href: "/app/inbox",
     label: "Inbox",
     description: "As conversas de WhatsApp, com você e a IA atendendo lado a lado.",
@@ -187,6 +196,14 @@ export const NAV_DESTINATIONS: NavDestination[] = [
     label: "Contatos",
     description: "As pessoas do outro lado da conversa e seu histórico.",
     icon: Users,
+    group: "crm",
+    sidebar: true,
+  },
+  {
+    href: "/app/tasks",
+    label: "Tarefas & Agendamentos",
+    description: "Lista e calendário unificado de tarefas internas e agendamentos de consultas com data e horário.",
+    icon: CheckSquare,
     group: "crm",
     sidebar: true,
   },
@@ -360,18 +377,7 @@ export const NAV_DESTINATIONS: NavDestination[] = [
     sidebar: true,
     healthDot: true,
   },
-  {
-    // Não tinha link nenhum no app inteiro: só se chegava digitando a URL.
-    href: "/app/integrations/nuvemshop",
-    label: "Nuvemshop",
-    description: "Conecte a loja para trazer pedidos e clientes para dentro do CRM.",
-    icon: Storefront,
-    group: "canais",
-    // A página não filtra por papel, mas as Server Actions de conectar e
-    // desconectar exigem admin — mostrar a um viewer seria oferecer botão morto.
-    minRole: "admin",
-    sidebar: true,
-  },
+
   {
     href: "/app/webhooks",
     label: "Webhooks",

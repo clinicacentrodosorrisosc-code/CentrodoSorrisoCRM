@@ -7,6 +7,8 @@ import { Label } from "@/components/ui/label";
 import type { FlowNode } from "@/lib/followup/graph-schema";
 import type { RFNode, RFNodeData } from "@/lib/followup/graph-mappers";
 
+import { Button } from "@/components/ui/button";
+import { Trash } from "@/lib/ui/icons";
 import { ActionForm } from "./forms/ActionForm";
 import { ClassifyForm } from "./forms/ClassifyForm";
 import { ConditionForm } from "./forms/ConditionForm";
@@ -18,6 +20,7 @@ import { NODE_VISUALS } from "./nodes/nodeVisuals";
 interface Props {
   node: RFNode;
   onChange: (patch: Partial<RFNodeData>) => void;
+  onDelete?: () => void;
   /** Ramos deste nó que já têm aresta — quem sabe isso é o canvas, que é dono do grafo. */
   ramosLigados?: string[];
 }
@@ -31,7 +34,7 @@ interface Props {
  * quando o candidato passa no schema — senão mostra erro inline e o canvas
  * mantém a última config válida (nunca um valor pela metade rio acima).
  */
-export function NodeConfigPanel({ node, onChange, ramosLigados }: Props) {
+export function NodeConfigPanel({ node, onChange, onDelete, ramosLigados }: Props) {
   const type = node.type as FlowNode["type"];
   const visual = NODE_VISUALS[type];
   const Icon = visual.icon;
@@ -103,6 +106,20 @@ export function NodeConfigPanel({ node, onChange, ramosLigados }: Props) {
           <EndForm config={node.data.config as ConfigOf<"end">} onChange={(config) => onChange({ config })} />
         )}
       </div>
+
+      {onDelete && type !== "trigger" && (
+        <div className="mt-auto border-t border-border pt-4">
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            onClick={onDelete}
+            className="w-full gap-2 text-xs"
+          >
+            <Trash size={14} /> Excluir este nó
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

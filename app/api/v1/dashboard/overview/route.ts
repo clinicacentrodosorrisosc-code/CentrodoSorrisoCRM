@@ -1,0 +1,519 @@
+/**
+ * GET /api/v1/dashboard/overview — KPIs operacionais, comerciais e de agendamento do CRM.
+ *
+ * Agrega:
+ * - Conversas ativas
+ * - Novos contatos no período
+ * - Valores em aberto (Soma dos orçamentos/valores de cada lead no funil)
+ * - Orçamentos aprovados (Quantidade e valor total)
+ * - Valores recebidos (Total de baixas parciais pagas)
+ * - Saldo a receber de orçamentos aprovados
+ * - Métricas de Agendamentos (Total, Compareceu / Show Rate, Faltou / No-Show, Remarcados)
+ * - Mensagens enviadas hoje
+ * - Série temporal diária (conversas e mensagens para o gráfico)
+ * - Tempo médio de resposta (TMR)
+ * - Resumo recente de negócios com badges de orçamento
+ */
+import { randomUUID } from "node:crypto";
+import { type NextRequest } from "next/server";
+import { z } from "zod";
+
+import { fail, ok } from "@/lib/api/wrappers";
+import { requireRole } from "@/lib/auth/require-role";
+import { createAdminClient } from "@/lib/supabase/admin";
+import type { OrcamentoLead } from "@/lib/types/orcamento";
+
+export const dynamic = "force-dynamic";
+
+const querySchema = z.object({
+  days: z.coerce.number().int().min(1).max(90).default(30),
+});
+
+export interface DailyPoint {
+  date: string; // YYYY-MM-DD
+  label: string; // DD/MM
+  conversations: number;
+  messages_sent: number;
+  messages_received: number;
+}
+
+export interface OrcamentoReportItem {
+  lead_id: string;
+  lead_title: string;
+  contact_name: string | null;
+  stage_name: string;
+  total_cents: number;
+  total_pago_cents: number;
+  saldo_restante_cents: number;
+  status: string;
+  aprovado_em: string | null;
+  procedimentos: string[];
+  pagamentos: {
+    id: string;
+    data: string;
+    metodo: string;
+    valor_cents: number;
+    observacao?: string;
+  }[];
+}
+
+export interface AgendamentoReportItem {
+  lead_id: string;
+  lead_title: string;
+  contact_name: string | null;
+  stage_name: string;
+  procedimento: string | null;
+  agendamento_data: string;
+  agendamento_hora: string | null;
+  agendamento_status: "agendado" | "confirmado" | "compareceu" | "faltou" | "remarcado" | "cancelado";
+  valor_cents: number | null;
+  created_at: string;
+}
+
+export interface DashboardOverviewData {
+  period_days: number;
+  kpis: {
+    active_conversations: number;
+    new_contacts: number;
+    open_deals_value_cents: number;
+    open_deals_count: number;
+    approved_budgets_count: number;
+    approved_budgets_value_cents: number;
+    total_received_value_cents: number;
+    pending_received_value_cents: number;
+    // Métricas de Agendamentos & Presença (No-Show)
+    agendamentos_total_count: number;
+    agendamentos_compareceu_count: number;
+    agendamentos_compareceu_taxa: number; // % (Show Rate)
+    agendamentos_faltou_count: number;
+    agendamentos_faltou_taxa: number; // % (No-Show Rate)
+    agendamentos_remarcado_count: number;
+    agendamentos_pendente_count: number;
+    messages_sent_today: number;
+    avg_response_time_seconds: number | null;
+  };
+  daily_series: DailyPoint[];
+  pipeline_stages: {
+    id: string;
+    name: string;
+    color: string | null;
+    count: number;
+    value_cents: number;
+  }[];
+  recent_leads: {
+    id: string;
+    title: string;
+    value_cents: number;
+    stage_name: string;
+    contact_name: string | null;
+    budget_status?: string | null;
+    created_at: string;
+  }[];
+  // Listas detalhadas para os drawers de relatório dos KPIs
+  approved_budgets_list: OrcamentoReportItem[];
+  received_payments_list: OrcamentoReportItem[];
+  pending_balance_list: OrcamentoReportItem[];
+  // Listas detalhadas de agendamento
+  agendamentos_list: AgendamentoReportItem[];
+  faltas_list: AgendamentoReportItem[];
+  compareceram_list: AgendamentoReportItem[];
+  remarcados_list: AgendamentoReportItem[];
+}
+
+export async function GET(req: NextRequest): Promise<Response> {
+  const requestId = randomUUID();
+
+  const authz = await requireRole("agent", { requestId, resource: "dashboard" });
+  if (!authz.ok) return authz.response;
+  const { org: activeOrg } = authz;
+
+  const url = new URL(req.url);
+  const parsed = querySchema.safeParse({
+    days: url.searchParams.get("days") ?? 30,
+  });
+
+  if (!parsed.success) {
+    return fail("validation_failed", "Parâmetros inválidos.", 422, {
+      details: parsed.error.flatten().fieldErrors as Record<string, unknown>,
+      requestId,
+    });
+  }
+
+  const days = parsed.data.days;
+  const now = new Date();
+  const fromDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+
+  const supabase = createAdminClient();
+
+  // 1. Conversas ativas (status = open)
+  const { count: activeConversationsCount } = await supabase
+    .from("conversations")
+    .select("id", { count: "exact", head: true })
+    .eq("organization_id", activeOrg.orgId)
+    .eq("status", "open");
+
+  // 2. Novos contatos criados no período
+  const { count: newContactsCount } = await supabase
+    .from("contacts")
+    .select("id", { count: "exact", head: true })
+    .eq("organization_id", activeOrg.orgId)
+    .gte("created_at", fromDate.toISOString());
+
+  // 3. Negócios e Orçamentos (crm_leads)
+  const { data: allLeads, error: leadsError } = await supabase
+    .from("crm_leads")
+    .select("id, title, value_cents, stage_id, created_at, contact_id, status, closed_at, custom_fields")
+    .eq("organization_id", activeOrg.orgId)
+    .order("created_at", { ascending: false });
+
+  if (leadsError) {
+    console.error("[dashboard/overview] crm_leads error:", leadsError);
+  }
+
+  // Leads em aberto no funil: status open E sem closed_at
+  const openLeads = (allLeads ?? []).filter(
+    (l) => l.status === "open" && !l.closed_at,
+  );
+
+  let totalOpenValueCents = 0;
+  let approvedBudgetsCount = 0;
+  let approvedBudgetsValueCents = 0;
+  let totalReceivedValueCents = 0;
+  let pendingReceivedValueCents = 0;
+
+  // Contadores de Agendamentos
+  let agendamentosTotalCount = 0;
+  let agendamentosCompareceuCount = 0;
+  let agendamentosFaltouCount = 0;
+  let agendamentosRemarcadoCount = 0;
+  let agendamentosPendenteCount = 0;
+
+  // Calcula métricas financeiras sobre todos os leads e orçamentos
+  (allLeads ?? []).forEach((lead) => {
+    const custom = (lead.custom_fields ?? {}) as Record<string, unknown>;
+    const orcamento = custom.orcamento as OrcamentoLead | undefined;
+
+    // Valor do lead: usa o total_cents do orçamento se houver, ou value_cents
+    const leadValue =
+      orcamento?.total_cents !== undefined && orcamento.total_cents > 0
+        ? orcamento.total_cents
+        : typeof lead.value_cents === "number"
+          ? lead.value_cents
+          : 0;
+
+    // Se está em aberto no funil (status open e sem closed_at), soma no Valor em Aberto
+    if (lead.status === "open" && !lead.closed_at) {
+      totalOpenValueCents += leadValue;
+    }
+
+    // Se possui orçamento estruturado
+    if (orcamento) {
+      const pago = orcamento.total_pago_cents || 0;
+      totalReceivedValueCents += pago;
+
+      if (orcamento.status === "aprovado" || orcamento.status === "quitado") {
+        approvedBudgetsCount += 1;
+        approvedBudgetsValueCents += orcamento.total_cents || leadValue;
+        pendingReceivedValueCents += orcamento.saldo_restante_cents || 0;
+      }
+    }
+  });
+
+  const openDealsCount = openLeads.length;
+
+  // 4. Mensagens enviadas hoje
+  const { count: messagesSentTodayCount } = await supabase
+    .from("messages")
+    .select("id", { count: "exact", head: true })
+    .eq("organization_id", activeOrg.orgId)
+    .eq("direction", "outbound")
+    .gte("created_at", startOfToday);
+
+  // 5. Etapas do funil
+  const stageIds = [...new Set((allLeads ?? []).map((l) => l.stage_id).filter(Boolean))] as string[];
+  const stageMap = new Map<string, { name: string; color: string | null; count: number; value_cents: number }>();
+
+  if (stageIds.length > 0) {
+    const { data: stages } = await supabase
+      .from("crm_stages")
+      .select("id, name, color")
+      .in("id", stageIds);
+    (stages ?? []).forEach((st) => {
+      stageMap.set(st.id, {
+        name: st.name,
+        color: (st as { color?: string | null }).color ?? null,
+        count: 0,
+        value_cents: 0,
+      });
+    });
+  }
+
+  openLeads.forEach((lead) => {
+    if (lead.stage_id) {
+      if (!stageMap.has(lead.stage_id)) {
+        stageMap.set(lead.stage_id, { name: "Etapa", color: null, count: 0, value_cents: 0 });
+      }
+      const entry = stageMap.get(lead.stage_id)!;
+      entry.count += 1;
+      const custom = (lead.custom_fields ?? {}) as Record<string, unknown>;
+      const orcamento = custom.orcamento as OrcamentoLead | undefined;
+      const val = orcamento?.total_cents ?? lead.value_cents ?? 0;
+      entry.value_cents += typeof val === "number" ? val : 0;
+    }
+  });
+
+  const pipelineStages = Array.from(stageMap.entries()).map(([id, data]) => ({
+    id,
+    name: data.name,
+    color: data.color,
+    count: data.count,
+    value_cents: data.value_cents,
+  }));
+
+  // 6. Série temporal diária para o gráfico
+  const { data: recentConversations } = await supabase
+    .from("conversations")
+    .select("id, created_at")
+    .eq("organization_id", activeOrg.orgId)
+    .gte("created_at", fromDate.toISOString());
+
+  const { data: recentMessages } = await supabase
+    .from("messages")
+    .select("id, direction, created_at")
+    .eq("organization_id", activeOrg.orgId)
+    .gte("created_at", fromDate.toISOString());
+
+  const dailyMap = new Map<string, { conversations: number; sent: number; received: number }>();
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+    const key = d.toISOString().slice(0, 10);
+    dailyMap.set(key, { conversations: 0, sent: 0, received: 0 });
+  }
+
+  (recentConversations ?? []).forEach((c) => {
+    const key = c.created_at.slice(0, 10);
+    if (dailyMap.has(key)) {
+      dailyMap.get(key)!.conversations += 1;
+    }
+  });
+
+  (recentMessages ?? []).forEach((m) => {
+    const key = m.created_at.slice(0, 10);
+    if (dailyMap.has(key)) {
+      if (m.direction === "outbound") {
+        dailyMap.get(key)!.sent += 1;
+      } else {
+        dailyMap.get(key)!.received += 1;
+      }
+    }
+  });
+
+  const dailySeries: DailyPoint[] = Array.from(dailyMap.entries()).map(([dateStr, metrics]) => {
+    const [, month, day] = dateStr.split("-");
+    return {
+      date: dateStr,
+      label: `${day}/${month}`,
+      conversations: metrics.conversations,
+      messages_sent: metrics.sent,
+      messages_received: metrics.received,
+    };
+  });
+
+  // 7. Tempo Médio de Resposta (TMR)
+  let avgResponseTimeSeconds: number | null = null;
+  try {
+    const { data: attendantStats } = await supabase.rpc("fn_attendant_metrics", {
+      p_org: activeOrg.orgId,
+      p_from: fromDate.toISOString(),
+      p_to: now.toISOString(),
+    } as never);
+
+    if (attendantStats && Array.isArray(attendantStats) && attendantStats.length > 0) {
+      const validTimes = attendantStats
+        .map((s: { avg_first_response_seconds?: number }) => s.avg_first_response_seconds)
+        .filter((t): t is number => typeof t === "number" && t > 0);
+
+      if (validTimes.length > 0) {
+        avgResponseTimeSeconds = Math.round(
+          validTimes.reduce((acc, cur) => acc + cur, 0) / validTimes.length,
+        );
+      }
+    }
+  } catch {
+    // Silently fallback if RPC not ready
+  }
+
+  // 8. Busca contatos para enriquecer os relatórios
+  const contactIds = [...new Set((allLeads ?? []).map((l) => l.contact_id).filter(Boolean))] as string[];
+  const allContactNames = new Map<string, string>();
+  if (contactIds.length > 0) {
+    const { data: contacts } = await supabase
+      .from("contacts")
+      .select("id, name, display_name")
+      .in("id", contactIds);
+    (contacts ?? []).forEach((c) => {
+      allContactNames.set(c.id, c.display_name || c.name || "Contato");
+    });
+  }
+
+  // Montagem dos relatórios de Orçamento
+  const toReportItem = (
+    lead: { id: string; title: string; stage_id: string | null; contact_id: string | null },
+    orc: OrcamentoLead,
+  ): OrcamentoReportItem => ({
+    lead_id: lead.id,
+    lead_title: lead.title,
+    contact_name: lead.contact_id ? allContactNames.get(lead.contact_id) ?? null : null,
+    stage_name: lead.stage_id && stageMap.has(lead.stage_id) ? stageMap.get(lead.stage_id)!.name : "Etapa inicial",
+    total_cents: orc.total_cents,
+    total_pago_cents: orc.total_pago_cents ?? 0,
+    saldo_restante_cents: orc.saldo_restante_cents ?? 0,
+    status: orc.status,
+    aprovado_em: orc.aprovado_em ?? null,
+    procedimentos: (orc.itens ?? []).map((i) => i.descricao),
+    pagamentos: (orc.pagamentos ?? []).map((p) => ({
+      id: p.id,
+      data: p.data,
+      metodo: p.metodo,
+      valor_cents: p.valor_cents,
+      observacao: p.observacao,
+    })),
+  });
+
+  // Listas para os drawers de relatório financeiro
+  const approvedBudgetsList: OrcamentoReportItem[] = [];
+  const receivedPaymentsList: OrcamentoReportItem[] = [];
+  const pendingBalanceList: OrcamentoReportItem[] = [];
+
+  // Listas para os drawers de Agendamentos & Presença
+  const agendamentosList: AgendamentoReportItem[] = [];
+  const faltasList: AgendamentoReportItem[] = [];
+  const compareceramList: AgendamentoReportItem[] = [];
+  const remarcadosList: AgendamentoReportItem[] = [];
+
+  (allLeads ?? []).forEach((lead) => {
+    const custom = (lead.custom_fields ?? {}) as Record<string, unknown>;
+    const orcamento = custom.orcamento as OrcamentoLead | undefined;
+
+    // Relatórios de Orçamento
+    if (orcamento) {
+      const item = toReportItem(lead, orcamento);
+      if (orcamento.status === "aprovado" || orcamento.status === "quitado") {
+        approvedBudgetsList.push(item);
+      }
+      if ((orcamento.total_pago_cents ?? 0) > 0) {
+        receivedPaymentsList.push(item);
+      }
+      if (
+        (orcamento.status === "aprovado" || orcamento.status === "quitado") &&
+        (orcamento.saldo_restante_cents ?? 0) > 0
+      ) {
+        pendingBalanceList.push(item);
+      }
+    }
+
+    // Processamento de Agendamentos & Presença
+    const agendData = String(custom.agendamento_data ?? "").trim();
+    const agendHora = String(custom.agendamento_hora ?? "").trim() || null;
+    const proc = String(custom.procedimento ?? custom.procedure ?? "").trim() || null;
+    const agendStatus = (custom.agendamento_status as AgendamentoReportItem["agendamento_status"]) ?? "agendado";
+    const contactName = lead.contact_id ? allContactNames.get(lead.contact_id) ?? null : null;
+    const stageName = lead.stage_id && stageMap.has(lead.stage_id) ? stageMap.get(lead.stage_id)!.name : "Etapa inicial";
+
+    if (agendData) {
+      agendamentosTotalCount += 1;
+      const agendItem: AgendamentoReportItem = {
+        lead_id: lead.id,
+        lead_title: lead.title,
+        contact_name: contactName,
+        stage_name: stageName,
+        procedimento: proc,
+        agendamento_data: agendData,
+        agendamento_hora: agendHora,
+        agendamento_status: agendStatus,
+        valor_cents: lead.value_cents ?? null,
+        created_at: lead.created_at,
+      };
+
+      agendamentosList.push(agendItem);
+
+      if (agendStatus === "faltou") {
+        agendamentosFaltouCount += 1;
+        faltasList.push(agendItem);
+      } else if (agendStatus === "compareceu") {
+        agendamentosCompareceuCount += 1;
+        compareceramList.push(agendItem);
+      } else if (agendStatus === "remarcado") {
+        agendamentosRemarcadoCount += 1;
+        remarcadosList.push(agendItem);
+      } else {
+        agendamentosPendenteCount += 1;
+      }
+    }
+  });
+
+  const agendamentosCompareceuTaxa =
+    agendamentosTotalCount > 0
+      ? Math.round((agendamentosCompareceuCount / agendamentosTotalCount) * 100)
+      : 0;
+
+  const agendamentosFaltouTaxa =
+    agendamentosTotalCount > 0
+      ? Math.round((agendamentosFaltouCount / agendamentosTotalCount) * 100)
+      : 0;
+
+  // 9. Leads recentes (top 5 abertos)
+  const recentLeadsSubset = openLeads.slice(0, 5);
+  const recentLeads = recentLeadsSubset.map((lead) => {
+    const custom = (lead.custom_fields ?? {}) as Record<string, unknown>;
+    const orcamento = custom.orcamento as OrcamentoLead | undefined;
+    const val = orcamento?.total_cents ?? lead.value_cents ?? 0;
+
+    return {
+      id: lead.id,
+      title: lead.title,
+      value_cents: typeof val === "number" ? val : 0,
+      stage_name: lead.stage_id && stageMap.has(lead.stage_id) ? stageMap.get(lead.stage_id)!.name : "Etapa inicial",
+      contact_name: lead.contact_id ? allContactNames.get(lead.contact_id) ?? null : null,
+      budget_status: orcamento?.status ?? null,
+      created_at: lead.created_at,
+    };
+  });
+
+  const payload: DashboardOverviewData = {
+    period_days: days,
+    kpis: {
+      active_conversations: activeConversationsCount ?? 0,
+      new_contacts: newContactsCount ?? 0,
+      open_deals_value_cents: totalOpenValueCents,
+      open_deals_count: openDealsCount,
+      approved_budgets_count: approvedBudgetsCount,
+      approved_budgets_value_cents: approvedBudgetsValueCents,
+      total_received_value_cents: totalReceivedValueCents,
+      pending_received_value_cents: pendingReceivedValueCents,
+      // Agendamentos
+      agendamentos_total_count: agendamentosTotalCount,
+      agendamentos_compareceu_count: agendamentosCompareceuCount,
+      agendamentos_compareceu_taxa: agendamentosCompareceuTaxa,
+      agendamentos_faltou_count: agendamentosFaltouCount,
+      agendamentos_faltou_taxa: agendamentosFaltouTaxa,
+      agendamentos_remarcado_count: agendamentosRemarcadoCount,
+      agendamentos_pendente_count: agendamentosPendenteCount,
+      messages_sent_today: messagesSentTodayCount ?? 0,
+      avg_response_time_seconds: avgResponseTimeSeconds,
+    },
+    daily_series: dailySeries,
+    pipeline_stages: pipelineStages,
+    recent_leads: recentLeads,
+    approved_budgets_list: approvedBudgetsList,
+    received_payments_list: receivedPaymentsList,
+    pending_balance_list: pendingBalanceList,
+    agendamentos_list: agendamentosList,
+    faltas_list: faltasList,
+    compareceram_list: compareceramList,
+    remarcados_list: remarcadosList,
+  };
+
+  return ok(payload, { requestId });
+}

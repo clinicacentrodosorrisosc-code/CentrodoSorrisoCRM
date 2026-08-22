@@ -8,7 +8,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import { ArrowRight } from "@/lib/ui/icons";
+import { Button } from "@/components/ui/button";
+import { ArrowRight, Trash } from "@/lib/ui/icons";
 import { conditionKey } from "@/lib/followup/edge-condition-options";
 import { branchIdForCondition, nodeBranches } from "@/lib/followup/graph-schema";
 import type { FlowEdge, FlowNode } from "@/lib/followup/graph-schema";
@@ -19,6 +20,7 @@ interface Props {
   targetNode: FlowNode | undefined;
   condition: FlowEdge["condition"];
   onChange: (condition: FlowEdge["condition"]) => void;
+  onDelete?: () => void;
 }
 
 /**
@@ -31,7 +33,7 @@ interface Props {
  * Um controle que a tela oferece e o motor ignora é pior que um ausente — o
  * ausente o usuário contorna, o decorativo ele acredita.
  */
-export function EdgeConfigPanel({ sourceNode, targetNode, condition, onChange }: Props) {
+export function EdgeConfigPanel({ sourceNode, targetNode, condition, onChange, onDelete }: Props) {
   const options = nodeBranches(
     sourceNode ?? { type: "trigger", config: {} },
   ).map((branch) => ({
@@ -82,6 +84,20 @@ export function EdgeConfigPanel({ sourceNode, targetNode, condition, onChange }:
           </p>
         )}
       </div>
+
+      {onDelete && (
+        <div className="mt-auto border-t border-border pt-4">
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            onClick={onDelete}
+            className="w-full gap-2 text-xs"
+          >
+            <Trash size={14} /> Excluir esta conexão
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

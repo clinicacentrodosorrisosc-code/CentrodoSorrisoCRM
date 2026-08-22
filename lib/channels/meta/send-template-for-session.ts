@@ -15,7 +15,9 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { decryptWebhookSecret } from "@/lib/webhooks/secrets";
 import { sendTemplate } from "./send-template";
+import { metaSessionForOrg } from "./session";
 
 export interface SendTemplateForSessionInput {
   organizationId: string;
@@ -52,9 +54,22 @@ export async function sendTemplateForSession(
 
   if (error) throw new Error(`template_lookup_failed: ${error.message}`);
 
+  let phoneNumberId = process.env.META_PHONE_NUMBER_ID ?? "";
+  let token = process.env.META_SYSTEM_USER_TOKEN ?? "";
+
+  if (!phoneNumberId || !token) {
+    const session = await metaSessionForOrg(input.organizationId);
+    if (session?.phoneNumberId) phoneNumberId = session.phoneNumberId;
+    if (session?.tokenEncrypted) {
+      try {
+        token = (await decryptWebhookSecret(db, session.tokenEncrypted)) ?? "";
+      } catch {}
+    }
+  }
+
   const resultado = await sendTemplate({
-    phoneNumberId: process.env.META_PHONE_NUMBER_ID ?? "",
-    token: process.env.META_SYSTEM_USER_TOKEN ?? "",
+    phoneNumberId,
+    token,
     graphVersion: process.env.META_GRAPH_VERSION ?? "v22.0",
     to: input.to,
     binding: {

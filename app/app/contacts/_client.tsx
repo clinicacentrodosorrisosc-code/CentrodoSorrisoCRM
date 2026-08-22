@@ -20,9 +20,10 @@ import { EmptyContacts } from "@/components/empty";
 
 const SOURCE_OPTIONS = [
   { value: undefined, label: "Todas as origens" },
-  { value: "manual", label: "Manual" },
   { value: "whatsapp", label: "WhatsApp" },
-  { value: "nuvemshop", label: "Nuvemshop" },
+  { value: "manual", label: "Manual" },
+  { value: "instagram", label: "Instagram" },
+  { value: "site", label: "Site / Landing Page" },
 ];
 
 export function ContactsListClient() {

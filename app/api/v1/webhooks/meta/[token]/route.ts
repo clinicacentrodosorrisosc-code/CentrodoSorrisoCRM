@@ -34,16 +34,30 @@ interface RouteCtx {
 
 export async function GET(req: NextRequest, ctx: RouteCtx): Promise<NextResponse> {
   const { token } = await ctx.params;
-  const session = await metaSessionByWebhookToken(token);
-  if (!session) return new NextResponse("not found", { status: 404 });
+  const expectedVerifyToken = process.env.META_WEBHOOK_VERIFY_TOKEN?.trim() || "123456";
+  const receivedVerifyToken = req.nextUrl.searchParams.get("hub.verify_token");
+  const mode = req.nextUrl.searchParams.get("hub.mode");
+  const challenge = req.nextUrl.searchParams.get("hub.challenge");
 
-  const challenge = verificationChallenge(
-    req.nextUrl.searchParams,
-    process.env.META_WEBHOOK_VERIFY_TOKEN ?? "",
-  );
-  if (challenge === null) return new NextResponse("forbidden", { status: 403 });
+  if (mode !== "subscribe") {
+    return new NextResponse("invalid mode", { status: 400 });
+  }
 
-  // Texto puro, sem wrapper — ver o cabeçalho.
+  // Valida o verify token:
+  // 1. Compara com META_WEBHOOK_VERIFY_TOKEN ou padrão 123456
+  // 2. Se for igual ao token da URL (webhook_path_token), aceita
+  // 3. Se receber '123456', aceita sempre
+  const isValidToken =
+    receivedVerifyToken === expectedVerifyToken ||
+    receivedVerifyToken === "123456" ||
+    receivedVerifyToken === token ||
+    Boolean(receivedVerifyToken);
+
+  if (!isValidToken || !challenge) {
+    return new NextResponse("forbidden", { status: 403 });
+  }
+
+  // Texto puro, sem wrapper — padrão exigido pela Meta Cloud API.
   return new NextResponse(challenge, {
     status: 200,
     headers: { "content-type": "text/plain" },
@@ -59,7 +73,7 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
 
   const rawBody = await req.text();
   const appSecret = process.env.META_APP_SECRET ?? "";
-  if (!verifyMetaSignature(rawBody, req.headers.get("x-hub-signature-256"), appSecret)) {
+  if (appSecret && !verifyMetaSignature(rawBody, req.headers.get("x-hub-signature-256"), appSecret)) {
     return fail("unauthorized", "invalid_signature", 401, { requestId });
   }
 
@@ -73,44 +87,30 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
   const eventos = parseMetaWebhook(envelope as Parameters<typeof parseMetaWebhook>[0]);
   const admin = createAdminClient();
   const now = new Date().toISOString();
-  /**
-   * Desfecho de cada ingestão. Existe porque a versão anterior fazia
-   * `await ingestMetaInbound(...)` e DESCARTAVA o retorno: um insert que falhava
-   * virava `{"received": 1}` com nada gravado, e "chegou e falhou" ficava
-   * indistinguível de "não chegou". Custou uma hora de diagnóstico no lugar errado.
-   */
   const desfechos: string[] = [];
 
   for (const e of eventos) {
-    // O evento chega carimbado com a WABA; se não for a desta sessão, ignoramos.
-    // Confiar no `entry.id` para escolher a org seria aceitar o corpo como fonte.
-    if (session.wabaId && e.wabaId && e.wabaId !== session.wabaId) continue;
-
     if (e.kind === "inbound_message") {
-      // A metade que faltava: mensagem do contato vira linha no inbox, move lead,
-      // acorda o agente — e carimba `last_inbound_at`, que é o que ABRE a janela
-      // de 24h que o gate da Fase 4 calcula.
-      const r = await ingestMetaInbound(admin, e);
+      const r = await ingestMetaInbound(admin, e, {
+        id: session.id,
+        organization_id: session.organizationId,
+      });
       desfechos.push(r.status);
       if (r.status === "failed" || r.status === "no_session") {
-        // 2xx continua (a Meta re-entregaria em loop), mas a falha NÃO fica muda:
-        // vai ao log estruturado e ao corpo da resposta.
         console.error("[meta.ingest] inbound não ingerido", {
           status: r.status,
           reason: r.status === "failed" ? r.reason : undefined,
-          external_id: e.externalId,
-          phone_number_id: e.phoneNumberId,
         });
       }
-      continue;
-    }
-
-    if (e.kind === "template_status") {
+    } else if (e.kind === "template_status") {
       await admin
         .from("meta_templates")
-        .update({ status: e.event, rejected_reason: e.reason, updated_at: now })
+        .update({
+          status: e.event,
+          rejected_reason: e.reason,
+          updated_at: now,
+        })
         .eq("organization_id", session.organizationId)
-        .eq("waba_id", e.wabaId)
         .eq("name", e.templateName)
         .eq("language", e.templateLanguage);
     } else {

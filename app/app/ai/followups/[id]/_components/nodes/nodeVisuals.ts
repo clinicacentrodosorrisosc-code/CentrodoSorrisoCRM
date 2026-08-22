@@ -103,6 +103,9 @@ export function describeNodeConfig(type: NodeType, config: FlowNode["config"]): 
       return "Início do fluxo";
     case "wait": {
       const c = config as ConfigOf<"wait">;
+      if (c.mode === "before_appointment") {
+        return `${c.offset_hours}h antes do agendamento`;
+      }
       return c.mode === "fixed"
         ? `${Math.round(c.duration_ms / 60_000)} min`
         : `${Math.round(c.min_ms / 60_000)}–${Math.round(c.max_ms / 60_000)} min (adaptativo)`;

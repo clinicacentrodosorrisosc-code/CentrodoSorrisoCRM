@@ -13490,4 +13490,47 @@ notify pgrst, 'reload schema';
 -- pode ser re-aplicado à vontade pelo `update.sh`.
 revoke insert, update, delete on table public.ai_budgets from authenticated, anon;
 
+-- =============================================================================
+-- APÊNDICE: crm_tasks — módulo de tarefas do CRM (idempotente)
+-- Adicionado em: 2026-08-21
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS "public"."crm_tasks" (
+    "id"              uuid NOT NULL DEFAULT gen_random_uuid(),
+    "organization_id" uuid NOT NULL,
+    "title"           text NOT NULL,
+    "description"     text,
+    "due_date"        timestamptz,
+    "priority"        text NOT NULL DEFAULT 'medium'::text,
+    "status"          text NOT NULL DEFAULT 'pending'::text,
+    "lead_id"         uuid,
+    "contact_id"      uuid,
+    "assigned_to"     uuid,
+    "created_by"      uuid,
+    "created_at"      timestamptz NOT NULL DEFAULT now(),
+    "updated_at"      timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT "crm_tasks_pkey" PRIMARY KEY ("id"),
+    CONSTRAINT "crm_tasks_priority_check" CHECK (priority IN ('low','medium','high','urgent')),
+    CONSTRAINT "crm_tasks_status_check"   CHECK (status IN ('pending','in_progress','done','cancelled')),
+    CONSTRAINT "crm_tasks_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE CASCADE,
+    CONSTRAINT "crm_tasks_lead_id_fkey"    FOREIGN KEY ("lead_id")    REFERENCES "public"."crm_leads"("id") ON DELETE SET NULL,
+    CONSTRAINT "crm_tasks_contact_id_fkey" FOREIGN KEY ("contact_id") REFERENCES "public"."contacts"("id") ON DELETE SET NULL
+);
+
+ALTER TABLE "public"."crm_tasks" ENABLE ROW LEVEL SECURITY;
+
+DO $baseline_guard$ BEGIN
+IF NOT EXISTS (SELECT 1 FROM pg_policy
+                WHERE polname = 'tenant_isolation_crm_tasks_all' AND polrelid = '"public"."crm_tasks"'::regclass) THEN
+CREATE POLICY "tenant_isolation_crm_tasks_all" ON "public"."crm_tasks" USING ((("organization_id" IN ( SELECT "public"."fn_user_org_ids"() AS "fn_user_org_ids")) OR "public"."fn_is_platform_admin"())) WITH CHECK ((("organization_id" IN ( SELECT "public"."fn_user_org_ids"() AS "fn_user_org_ids")) OR "public"."fn_is_platform_admin"()));
+END IF; END $baseline_guard$;
+
+GRANT ALL ON TABLE "public"."crm_tasks" TO "authenticated";
+GRANT ALL ON TABLE "public"."crm_tasks" TO "service_role";
+REVOKE ALL ON TABLE "public"."crm_tasks" FROM "anon";
+
+-- Índices para busca eficiente
+CREATE INDEX IF NOT EXISTS crm_tasks_org_due ON public.crm_tasks (organization_id, due_date);
+CREATE INDEX IF NOT EXISTS crm_tasks_org_status ON public.crm_tasks (organization_id, status);
+CREATE INDEX IF NOT EXISTS crm_tasks_lead_id ON public.crm_tasks (lead_id) WHERE lead_id IS NOT NULL;
+
 notify pgrst, 'reload schema';

@@ -24,6 +24,7 @@ import {
   type Combinador,
   type OperadorDaCondicao,
 } from "@/lib/followup/vocabulario";
+import { useEtapasDeGatilho } from "@/hooks/followup/useEtapasDeGatilho";
 import { Plus, Trash } from "@/lib/ui/icons";
 
 import type { ConfigOf } from "./shared";
@@ -139,6 +140,8 @@ export function ConditionForm({
   };
 
   const porRegra = branching === "per_check";
+
+  const { etapas } = useEtapasDeGatilho();
 
   return (
     <div className="space-y-3">
@@ -281,16 +284,38 @@ export function ConditionForm({
                 ))}
               </SelectContent>
             </Select>
-            <Input
-              aria-label="Valor"
-              placeholder={CAMPOS_DA_CONDICAO[check.field].tipoDeValor === "numero" ? "Ex.: 3" : "Valor"}
-              value={String(check.value)}
-              onChange={(e) => {
-                const next = checks.map((c, i) => (i === idx ? { ...c, value: e.target.value } : c));
-                setChecks(next);
-                commit({ checks: next });
-              }}
-            />
+            {check.field === "lead_stage" && etapas.length > 0 ? (
+              <Select
+                value={String(check.value)}
+                onValueChange={(v) => {
+                  const next = checks.map((c, i) => (i === idx ? { ...c, value: v } : c));
+                  setChecks(next);
+                  commit({ checks: next });
+                }}
+              >
+                <SelectTrigger aria-label="Etapa">
+                  <SelectValue placeholder="Escolha a etapa do funil" />
+                </SelectTrigger>
+                <SelectContent>
+                  {etapas.map((etapa) => (
+                    <SelectItem key={etapa.stageId} value={etapa.stageId}>
+                      {etapa.stageName} {etapa.pipelineName ? `(${etapa.pipelineName})` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <Input
+                aria-label="Valor"
+                placeholder={CAMPOS_DA_CONDICAO[check.field].tipoDeValor === "numero" ? "Ex.: 3" : "Valor"}
+                value={String(check.value)}
+                onChange={(e) => {
+                  const next = checks.map((c, i) => (i === idx ? { ...c, value: e.target.value } : c));
+                  setChecks(next);
+                  commit({ checks: next });
+                }}
+              />
+            )}
             {/* A frase inteira, para quem não tem certeza do que os três campos
                 acima somam — e o aviso quando o motor nunca satisfaz o par. */}
             <p className="text-xs text-text-muted">{fraseDaCondicao(check.field, check.op, check.value)}</p>

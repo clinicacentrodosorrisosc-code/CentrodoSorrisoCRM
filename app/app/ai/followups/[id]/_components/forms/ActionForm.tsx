@@ -6,7 +6,9 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -14,14 +16,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { actionConfigSchema } from "@/lib/followup/graph-schema";
 import { MODOS_DA_ACAO, opcoes, type ModoDaAcao } from "@/lib/followup/vocabulario";
 import { useMessageTemplates } from "@/hooks/inbox/useMessageTemplates";
+import { useTemplates } from "@/hooks/channels/useTemplates";
 
 import type { ConfigOf } from "./shared";
 
 /**
- * O seletor de modelo, no lugar dos dois `<Input>` que pediam um UUID colado à
- * mão. Trata os três estados em vez de fingir que a lista sempre chega:
- * carregando, vazia e erro — porque um seletor vazio sem explicação é o mesmo
- * beco sem saída que o campo de UUID era, só que mais bonito.
+ * Seletor de modelo que integra os modelos do WhatsApp Oficial (Meta)
+ * e os modelos rápidos do Inbox.
  */
 function SeletorDeModelo({
   id,
@@ -34,17 +35,24 @@ function SeletorDeModelo({
   onChange: (templateId: string) => void;
   permiteVazio: boolean;
 }) {
-  const { data: modelos, isLoading, isError } = useMessageTemplates();
+  const { data: modelosInbox, isLoading: loadingInbox } = useMessageTemplates();
+  const { data: metaPayload, isLoading: loadingMeta } = useTemplates();
 
-  if (isLoading) return <p className="text-xs text-text-muted">Carregando seus modelos…</p>;
-  if (isError) {
-    return <p className="text-xs text-error-fg">Não consegui carregar seus modelos de mensagem. Recarregue a página.</p>;
-  }
-  if (!modelos?.length) {
+  const metaTemplates = (metaPayload as unknown as { data?: { templates?: Array<{ name: string; language: string; status: string }> }; templates?: Array<{ name: string; language: string; status: string }> })?.data?.templates
+    ?? (metaPayload as unknown as { templates?: Array<{ name: string; language: string; status: string }> })?.templates
+    ?? [];
+  const inboxTemplates = modelosInbox ?? [];
+  const isLoading = loadingInbox || loadingMeta;
+
+  if (isLoading) return <p className="text-xs text-muted-foreground">Carregando seus modelos…</p>;
+
+  const totalTemplates = metaTemplates.length + inboxTemplates.length;
+
+  if (totalTemplates === 0) {
     return (
-      <p className="text-xs text-text-muted">
-        Você ainda não tem modelos de mensagem. Crie um em Ajustes → Modelos e ele aparece aqui.
-      </p>
+      <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+        Nenhum modelo encontrado. Conecte o canal oficial e sincronize seus templates em <strong>Conexões → Canal Oficial</strong>.
+      </div>
     );
   }
 
@@ -54,16 +62,41 @@ function SeletorDeModelo({
       value={valor === "" ? SEM_MODELO : valor}
       onValueChange={(v) => onChange(v === SEM_MODELO ? "" : v)}
     >
-      <SelectTrigger id={id}>
-        <SelectValue placeholder="Escolha um modelo" />
+      <SelectTrigger id={id} className="text-sm">
+        <SelectValue placeholder="Escolha um modelo de mensagem" />
       </SelectTrigger>
       <SelectContent>
         {permiteVazio && <SelectItem value={SEM_MODELO}>Nenhum</SelectItem>}
-        {modelos.map((m) => (
-          <SelectItem key={m.id} value={m.id}>
-            {m.title}
-          </SelectItem>
-        ))}
+
+        {metaTemplates.length > 0 && (
+          <SelectGroup>
+            <SelectLabel className="text-xs font-semibold text-primary">
+              WhatsApp Oficial (Templates Meta)
+            </SelectLabel>
+            {metaTemplates.map((m) => (
+              <SelectItem key={`${m.name}-${m.language}`} value={m.name}>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs">
+                    {m.status === "APPROVED" ? "🟢" : "🟡"} <strong>{m.name}</strong> ({m.language})
+                  </span>
+                </div>
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        )}
+
+        {inboxTemplates.length > 0 && (
+          <SelectGroup>
+            <SelectLabel className="text-xs font-semibold text-muted-foreground">
+              Modelos Rápidos (Inbox)
+            </SelectLabel>
+            {inboxTemplates.map((m) => (
+              <SelectItem key={m.id} value={m.id}>
+                💬 {m.title}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        )}
       </SelectContent>
     </Select>
   );
@@ -160,17 +193,38 @@ export function ActionForm({
           </div>
         </>
       ) : (
-        <div className="space-y-2">
-          <Label htmlFor="action-template-id">Modelo de mensagem</Label>
-          <SeletorDeModelo
-            id="action-template-id"
-            valor={templateId}
-            permiteVazio={false}
-            onChange={(v) => {
-              setTemplateId(v);
-              commit({ mode, promptHint, fallbackTemplateId, templateId: v });
-            }}
-          />
+        <div className="space-y-3">
+          <div className="space-y-2">
+            <Label htmlFor="action-template-id">Modelo de mensagem</Label>
+            <SeletorDeModelo
+              id="action-template-id"
+              valor={templateId}
+              permiteVazio={false}
+              onChange={(v) => {
+                setTemplateId(v);
+                commit({ mode, promptHint, fallbackTemplateId, templateId: v });
+              }}
+            />
+          </div>
+
+          {templateId && (
+            <div className="space-y-2 rounded-md border border-primary/20 bg-primary/5 p-3 text-xs">
+              <p className="font-semibold text-primary">📌 Variáveis e Campos Personalizados:</p>
+              <div className="space-y-1 text-muted-foreground">
+                <div className="flex items-center justify-between">
+                  <span>Variável <code>{"{{1}}"}</code></span>
+                  <span className="font-medium text-foreground">🏷️ Título do Lead</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>Variável <code>{"{{2}}"}</code></span>
+                  <span className="font-medium text-foreground">📅 Data e Hora da Consulta</span>
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground pt-1 border-t border-primary/10 leading-relaxed">
+                As variáveis são extraídas automaticamente do card do Lead (o <strong>Título do Lead</strong> para a variável 1, e <code>agendamento_data</code> / <code>agendamento_hora</code> para a variável 2) no momento exato do disparo.
+              </p>
+            </div>
+          )}
         </div>
       )}
       {error && <p className="text-xs text-error-fg">{error}</p>}

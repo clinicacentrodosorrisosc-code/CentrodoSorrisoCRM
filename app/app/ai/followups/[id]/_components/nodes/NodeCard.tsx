@@ -1,9 +1,9 @@
 "use client";
-
-import { Handle, Position } from "@xyflow/react";
+import { Handle, Position, useReactFlow } from "@xyflow/react";
 
 import type { FlowBranch } from "@/lib/followup/graph-schema";
 import { rotuloDoRamo } from "@/lib/followup/rotulo-do-ramo";
+import { Trash } from "@/lib/ui/icons";
 import { cn } from "@/lib/utils";
 import type { NodeVisual } from "./nodeVisuals";
 
@@ -16,21 +16,9 @@ interface Props {
   errors?: string[];
   showTarget?: boolean;
   showSource?: boolean;
-  /**
-   * As saídas do nó, quando ele tem mais de uma. Cada ramo vira UMA linha com
-   * rótulo legível e a sua própria bolinha — era isso que faltava: com um handle
-   * só não havia onde ligar "a aresta da regra 2", e desenhar bolinhas iguais
-   * sem nome trocaria um problema por outro.
-   */
   branches?: FlowBranch[];
 }
 
-/**
- * Shared card shell for all 6 node types — a card, not a bare React Flow box:
- * icon chip + title + one-line subtitle + connection handles, left border in
- * the type's accent. Red ring + inline message when `errors` is non-empty
- * (publish 422 anchored to this node — Task 6.2 PublishBar wires this).
- */
 export function NodeCard({
   id,
   visual,
@@ -42,16 +30,15 @@ export function NodeCard({
   showSource = true,
   branches,
 }: Props) {
+  const { deleteElements } = useReactFlow();
   const Icon = visual.icon;
   const hasError = (errors?.length ?? 0) > 0;
-  // Uma saída só continua sendo a bolinha de sempre no rodapé: não há o que
-  // rotular, e mexer nisso quebraria o arrasto de todo nó não-ramificado.
   const branchRows = branches !== undefined && branches.length > 1 ? branches : null;
 
   return (
     <div
       className={cn(
-        "w-56 rounded-md border border-l-4 border-border bg-surface shadow-sm transition-shadow",
+        "group relative w-56 rounded-md border border-l-4 border-border bg-surface shadow-sm transition-shadow",
         visual.borderClassName,
         selected && "ring-2 ring-accent-500 ring-offset-1 ring-offset-bg",
         hasError && "border-error ring-2 ring-error ring-offset-1 ring-offset-bg",
@@ -73,6 +60,20 @@ export function NodeCard({
           <p className="truncate text-sm font-medium text-text">{label}</p>
           <p className="truncate text-xs text-text-muted">{subtitle}</p>
         </div>
+        {visual.type !== "trigger" && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              deleteElements({ nodes: [{ id }] });
+            }}
+            className="opacity-0 group-hover:opacity-100 hover:text-destructive text-muted-foreground p-1 transition-opacity rounded hover:bg-destructive/10"
+            title="Excluir este nó"
+            aria-label="Excluir este nó"
+          >
+            <Trash size={13} />
+          </button>
+        )}
       </div>
       {hasError && (
         <p

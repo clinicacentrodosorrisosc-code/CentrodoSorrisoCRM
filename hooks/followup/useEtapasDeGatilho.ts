@@ -43,22 +43,25 @@ export interface EtapasDeGatilho {
 export function useEtapasDeGatilho(habilitado = true): EtapasDeGatilho {
   const funis = useQuery({
     queryKey: ["pipelines"],
-    queryFn: async () => apiClient.get<{ data: Pipeline[] }>("/api/v1/pipelines"),
+    queryFn: async () => apiClient.get<unknown>("/api/v1/pipelines"),
     staleTime: 60_000,
     enabled: habilitado,
   });
 
-  const lista = funis.data?.data ?? [];
+  const rawPipelines = funis.data as { data?: Pipeline[]; pipelines?: Pipeline[] } | Pipeline[] | undefined;
+  const lista: Pipeline[] = Array.isArray(rawPipelines)
+    ? rawPipelines
+    : rawPipelines?.data && Array.isArray(rawPipelines.data)
+      ? rawPipelines.data
+      : rawPipelines?.pipelines && Array.isArray(rawPipelines.pipelines)
+        ? rawPipelines.pipelines
+        : [];
 
-  // Uma consulta por funil: a org típica tem um punhado deles, e a alternativa
-  // (uma rota nova que devolvesse todas as etapas de todos os funis) seria um
-  // segundo contrato para o mesmo dado — que divergiria do primeiro no dia em
-  // que alguém mudasse o critério de "etapa ativa".
   const porFunil = useQueries({
     queries: lista.map((funil) => ({
       queryKey: ["agent-mapping", funil.id],
       queryFn: async () =>
-        apiClient.get<RespostaDeEtapas>(
+        apiClient.get<unknown>(
           `/api/v1/pipelines/${encodeURIComponent(funil.id)}/agent-mapping`,
         ),
       staleTime: 60_000,
@@ -68,13 +71,17 @@ export function useEtapasDeGatilho(habilitado = true): EtapasDeGatilho {
 
   const etapas: EtapaDeGatilho[] = [];
   lista.forEach((funil, i) => {
-    for (const etapa of porFunil[i]?.data?.data.etapas ?? []) {
-      etapas.push({
-        stageId: etapa.id,
-        stageName: etapa.name,
-        pipelineId: funil.id,
-        pipelineName: funil.name,
-      });
+    const rawData = porFunil[i]?.data as { data?: { etapas?: Array<{ id: string; name: string }> }; etapas?: Array<{ id: string; name: string }> } | undefined;
+    const etapasDoFunil = rawData?.data?.etapas ?? rawData?.etapas ?? [];
+    for (const etapa of etapasDoFunil) {
+      if (etapa?.id && etapa?.name) {
+        etapas.push({
+          stageId: etapa.id,
+          stageName: etapa.name,
+          pipelineId: funil.id,
+          pipelineName: funil.name,
+        });
+      }
     }
   });
 

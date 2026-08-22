@@ -287,3 +287,22 @@ export function createPgAdminClient(pool: pg.Pool): TurnBridgeAdminClient {
     },
   };
 }
+
+/** `TurnBridgeAdminClient` sobre `SupabaseClient` (service role). */
+export function createSupabaseTurnBridgeClient(admin: import("@supabase/supabase-js").SupabaseClient): TurnBridgeAdminClient {
+  const { createSupabaseAdminClient } = require("./engine");
+  const base = createSupabaseAdminClient(admin);
+  return {
+    ...base,
+    async loadEnrollmentById(orgId, id) {
+      const { data, error } = await admin
+        .from("followup_enrollments")
+        .select("*")
+        .eq("id", id)
+        .eq("organization_id", orgId)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      return data ? mapEnrollmentRow(data as Record<string, unknown>) : null;
+    },
+  };
+}

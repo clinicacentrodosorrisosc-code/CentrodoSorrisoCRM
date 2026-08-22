@@ -58,6 +58,7 @@ export {
   Archive,
   // feedback
   CheckCircle,
+  XCircle,
   Warning,
   WarningOctagon,
   Info,
@@ -114,4 +115,15 @@ export {
   Key,
   UserCircle,
   ClockCounterClockwise,
+  ArrowSquareOut,
+  IdentificationCard,
+  WhatsappLogo,
+  CurrencyDollar,
+  CreditCard,
+  Money,
+  // tarefas do CRM
+  CheckSquare,
+  CalendarBlank,
+  Timer,
+  UserList,
 } from "@phosphor-icons/react/dist/ssr";

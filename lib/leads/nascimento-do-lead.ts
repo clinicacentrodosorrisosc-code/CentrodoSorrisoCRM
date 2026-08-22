@@ -83,19 +83,45 @@ export async function funilDeEntrada(
   db: SupabaseClient,
   organizationId: string,
 ): Promise<{ pipelineId: string; stageId: string } | { erro: MotivoSemLead }> {
-  const { data: funil } = await db
+  // 1. Prioriza o funil "Comercial" (ou de Vendas) da organização
+  let { data: funil } = await db
     .from("crm_pipelines")
-    .select("id")
+    .select("id, name")
     .eq("organization_id", organizationId)
-    .eq("is_default", true)
+    .ilike("name", "%Comercial%")
     .eq("is_archived", false)
+    .limit(1)
     .maybeSingle();
+
+  // 2. Se não houver com nome "Comercial", busca o funil marcado como padrão (is_default)
+  if (!funil) {
+    const { data: funilPadrao } = await db
+      .from("crm_pipelines")
+      .select("id, name")
+      .eq("organization_id", organizationId)
+      .eq("is_default", true)
+      .eq("is_archived", false)
+      .maybeSingle();
+    funil = funilPadrao;
+  }
+
+  // 3. Fallback: pega o primeiro funil ativo da organização
+  if (!funil) {
+    const { data: primeiroFunil } = await db
+      .from("crm_pipelines")
+      .select("id, name")
+      .eq("organization_id", organizationId)
+      .eq("is_archived", false)
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    funil = primeiroFunil;
+  }
 
   if (!funil) return { erro: "sem_funil_de_entrada" };
 
-  // A PRIMEIRA etapa é a de menor `position` — a ordem do funil já diz qual é.
-  // Etapas de ganho/perda ficam de fora: um lead não nasce fechado, e um funil
-  // mal ordenado não pode fazer alguém entrar como "Perdido".
+  // A PRIMEIRA etapa é a de menor `position` (ordem do funil).
+  // Etapas de ganho/perda/arquivadas ficam de fora para o lead nascer na etapa inicial.
   const { data: etapa } = await db
     .from("crm_stages")
     .select("id")

@@ -57,6 +57,7 @@ export interface LeadFacts {
   tags: string[];
   steps_taken: number;
   last_outcome: string | null;
+  custom_fields?: Record<string, unknown> | null;
 }
 
 /** Reference to a `followup_enrollment_events` row — only what `resolveWaitPhase` needs. */
@@ -313,6 +314,35 @@ export function processNode(input: {
         // uma linha editada à mão, ou um bug futuro que grave sem clampar,
         // prenderia o lead muito além do que o operador configurou na tela, e
         // ninguém veria. Custa uma comparação por espera.
+        if (node.config.mode === "before_appointment") {
+          const customFields = (lead.custom_fields ?? {}) as Record<string, unknown>;
+          const dataStr = String(customFields.agendamento_data ?? "");
+          const horaStr = String(customFields.agendamento_hora ?? "09:00");
+          if (!dataStr) {
+            const edge = selectEdge(edges, node.id, { type: "always" });
+            if (!edge) return { kind: "fail", error: `wait node "${node.id}" has no outbound edge` };
+            return { kind: "advance", next_node_id: edge.target, next_eval_at: clock() };
+          }
+          const [anoStr, mesStr, diaStr] = dataStr.split("-");
+          const ano = Number(anoStr) || 2026;
+          const mes = Number(mesStr) || 1;
+          const dia = Number(diaStr) || 1;
+          const [horaPart, minPart] = horaStr.split(":");
+          const hora = Number(horaPart) || 0;
+          const min = Number(minPart) || 0;
+          const agendamentoData = new Date(ano, mes - 1, dia, hora, min, 0);
+          const offsetMs = (node.config.offset_hours ?? 24) * 60 * 60 * 1000;
+          const targetEvalAt = new Date(agendamentoData.getTime() - offsetMs);
+
+          if (targetEvalAt.getTime() <= clock().getTime()) {
+            const edge = selectEdge(edges, node.id, { type: "always" });
+            if (!edge) return { kind: "fail", error: `wait node "${node.id}" has no outbound edge` };
+            return { kind: "advance", next_node_id: edge.target, next_eval_at: clock() };
+          }
+
+          return { kind: "wait", next_eval_at: targetEvalAt };
+        }
+
         const planejada = node.config.mode === "smart" ? esperaPlanejadaDe(enrollment.timing_plan, node.id) : null;
         const durationMs =
           node.config.mode === "fixed"

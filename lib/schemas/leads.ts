@@ -77,6 +77,7 @@ export const createLeadSchema = z.object({
     .optional(),
   tags: z.array(z.string()).default([]),
   source: z.string().min(1).default("manual"),
+  custom_fields: z.record(z.string(), z.unknown()).optional(),
 });
 export type CreateLeadInput = z.infer<typeof createLeadSchema>;
 
@@ -104,6 +105,8 @@ export const updateLeadSchema = z.object({
     .nullable()
     .optional(),
   tags: z.array(z.string()).optional(),
+  source: z.string().optional(),
+  custom_fields: z.record(z.string(), z.unknown()).optional(),
 });
 export type UpdateLeadInput = z.infer<typeof updateLeadSchema>;
 
