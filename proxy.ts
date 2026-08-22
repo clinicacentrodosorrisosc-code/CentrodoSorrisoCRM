@@ -33,39 +33,86 @@ export async function proxy(request: NextRequest) {
     return response;
   }
 
-  const supabase = createServerClient(
-    env.NEXT_PUBLIC_SUPABASE_URL,
-    env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
+  try {
+    const supabase = createServerClient(
+      env.NEXT_PUBLIC_SUPABASE_URL,
+      env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      {
+        cookies: {
+          getAll() {
+            return request.cookies.getAll();
+          },
+          setAll(cookiesToSet: { name: string; value: string; options: CookieOptions }[]) {
+            cookiesToSet.forEach(({ name, value, options }) => {
+              request.cookies.set(name, value);
+              response.cookies.set(name, value, options);
+            });
+          },
         },
-        setAll(cookiesToSet: { name: string; value: string; options: CookieOptions }[]) {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            request.cookies.set(name, value);
-            response.cookies.set(name, value, options);
-          });
+        cookieOptions: {
+          name: COOKIE_NAME,
+          sameSite: "strict",
+          httpOnly: true,
+          secure: cookieSecure(),
+          path: "/",
         },
       },
-      cookieOptions: {
-        name: COOKIE_NAME,
-        sameSite: "strict",
-        httpOnly: true,
-        secure: cookieSecure(),
-        path: "/",
-      },
-    },
-  );
+    );
 
-  // Validate JWT server-side (NEVER use getSession on backend per CLAUDE.md).
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+    // Validate JWT server-side (NEVER use getSession on backend per CLAUDE.md).
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-  if (!user) {
-    // API routes must respond with JSON envelope (contract: {error:{code,message}})
-    // — never redirect HTML to JSON consumers. UI routes redirect to /login as before.
+    if (!user) {
+      if (pathname.startsWith("/api/")) {
+        return new NextResponse(
+          JSON.stringify({
+            error: {
+              code: "unauthenticated",
+              message: "Authentication required",
+            },
+          }),
+          {
+            status: 401,
+            headers: {
+              "content-type": "application/json",
+              "x-request-id": requestId,
+            },
+          },
+        );
+      }
+      const loginUrl = new URL("/login", request.url);
+      loginUrl.searchParams.set("next", pathname + search);
+      return NextResponse.redirect(loginUrl);
+    }
+
+    if (pathname.startsWith("/app")) {
+      const impCookie = request.cookies.get(IMPERSONATE_COOKIE_NAME_EDGE)?.value;
+      if (impCookie) {
+        const result = await verifyImpersonateCookieEdge(
+          impCookie,
+          env.IMPERSONATE_COOKIE_SECRET ?? "",
+        );
+        if (!result.valid) {
+          console.warn(
+            `[middleware] impersonate cookie invalid (${result.reason ?? "unknown"}) — clearing`,
+          );
+          response.cookies.delete(IMPERSONATE_COOKIE_NAME_EDGE);
+        }
+      }
+    }
+
+    if (isAdminSurface && pathname.startsWith("/admin") && pathname !== "/admin/forbidden") {
+      const { data: isAdmin, error } = await supabase.rpc("fn_is_platform_admin");
+      if (error || !isAdmin) {
+        return NextResponse.redirect(new URL("/admin/forbidden", request.url));
+      }
+    }
+
+    return response;
+  } catch (err) {
+    console.error("[proxy middleware] Erro no processamento de requisição:", err);
     if (pathname.startsWith("/api/")) {
       return new NextResponse(
         JSON.stringify({
@@ -87,39 +134,6 @@ export async function proxy(request: NextRequest) {
     loginUrl.searchParams.set("next", pathname + search);
     return NextResponse.redirect(loginUrl);
   }
-
-  // EPIC-11 S-11.07: validate impersonate cookie on /app/* paths. Middleware
-  // runs in Edge — no DB access, only HMAC + expiry. On any failure we delete
-  // the cookie (defence-in-depth) and let the request continue (the layout
-  // re-checks server-side; downstream code that depends on the cookie will
-  // simply see no impersonation in effect).
-  if (pathname.startsWith("/app")) {
-    const impCookie = request.cookies.get(IMPERSONATE_COOKIE_NAME_EDGE)?.value;
-    if (impCookie) {
-      const result = await verifyImpersonateCookieEdge(
-        impCookie,
-        env.IMPERSONATE_COOKIE_SECRET ?? "",
-      );
-      if (!result.valid) {
-        console.warn(
-          `[middleware] impersonate cookie invalid (${result.reason ?? "unknown"}) — clearing`,
-        );
-        response.cookies.delete(IMPERSONATE_COOKIE_NAME_EDGE);
-      }
-    }
-  }
-
-  // /admin/* additionally requires platform_admin (early gate — authoritative
-  // check is server-side in `requirePlatformAdmin`). Skip the RPC for
-  // `/admin/forbidden` (rendered to non-admins, would otherwise loop).
-  if (isAdminSurface && pathname.startsWith("/admin") && pathname !== "/admin/forbidden") {
-    const { data: isAdmin, error } = await supabase.rpc("fn_is_platform_admin");
-    if (error || !isAdmin) {
-      return NextResponse.redirect(new URL("/admin/forbidden", request.url));
-    }
-  }
-
-  return response;
 }
 
 export const config = {
