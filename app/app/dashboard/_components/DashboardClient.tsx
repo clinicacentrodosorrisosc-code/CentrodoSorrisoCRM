@@ -212,26 +212,26 @@ export function DashboardClient({ orgName }: Props) {
               Desempenho Comercial &amp; Financeiro
             </h2>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              {/* 1. Valores em Aberto (Funil Geral) */}
+              {/* 1. Pipeline em Negociação (Oportunidades em Aberto no Funil) */}
               <KpiCard
-                title="Valores em Aberto"
+                title="Pipeline em Negociação"
                 value={formatCentsBRL(payload.kpis.open_deals_value_cents)}
-                subtitle={`Soma de ${payload.kpis.open_deals_count} ${payload.kpis.open_deals_count === 1 ? "lead" : "leads"} no funil`}
+                subtitle={`Oportunidades ativas (${payload.kpis.open_deals_count} ${payload.kpis.open_deals_count === 1 ? "lead" : "leads"})`}
                 icon={<DollarSign className="h-5 w-5 text-primary" />}
                 highlight={true}
               />
 
-              {/* 2. Orçamentos Aprovados */}
+              {/* 2. Orçamentos Aprovados (Total Fechado) */}
               <KpiCard
                 title="Orçamentos Aprovados"
                 value={formatCentsBRL(payload.kpis.approved_budgets_value_cents)}
-                subtitle={`${payload.kpis.approved_budgets_count} ${payload.kpis.approved_budgets_count === 1 ? "proposta aprovada" : "propostas aprovadas"} · Clique para detalhes`}
+                subtitle={`${payload.kpis.approved_budgets_count} ${payload.kpis.approved_budgets_count === 1 ? "fechamento" : "fechamentos"} · Clique para detalhes`}
                 icon={<CheckCircle2 className="h-5 w-5 text-emerald-500" />}
                 clickable
                 onClick={() => openReport("approved")}
               />
 
-              {/* 3. Valores Recebidos */}
+              {/* 3. Valores Recebidos (Baixas Pagas) */}
               <KpiCard
                 title="Valores Recebidos"
                 value={formatCentsBRL(payload.kpis.total_received_value_cents)}
@@ -241,7 +241,7 @@ export function DashboardClient({ orgName }: Props) {
                 onClick={() => openReport("received")}
               />
 
-              {/* 4. Saldo a Receber */}
+              {/* 4. Saldo a Receber (Pendente dos Aprovados) */}
               <KpiCard
                 title="Saldo a Receber"
                 value={formatCentsBRL(payload.kpis.pending_received_value_cents)}

@@ -202,21 +202,26 @@ export async function GET(req: NextRequest): Promise<Response> {
           ? lead.value_cents
           : 0;
 
-    // Se está em aberto no funil (status open e sem closed_at), soma no Valor em Aberto
-    if (lead.status === "open" && !lead.closed_at) {
-      totalOpenValueCents += leadValue;
-    }
+    const isApprovedOrWon =
+      orcamento?.status === "aprovado" ||
+      orcamento?.status === "quitado" ||
+      lead.status === "won";
 
-    // Se possui orçamento estruturado
-    if (orcamento) {
-      const pago = orcamento.total_pago_cents || 0;
+    if (isApprovedOrWon) {
+      // 1. Orçamentos Aprovados: soma o valor total contratado
+      approvedBudgetsCount += 1;
+      approvedBudgetsValueCents += leadValue;
+
+      // 2. Valores Recebidos: soma exclusivamente as baixas pagas registradas
+      const pago = orcamento?.total_pago_cents ?? 0;
       totalReceivedValueCents += pago;
 
-      if (orcamento.status === "aprovado" || orcamento.status === "quitado") {
-        approvedBudgetsCount += 1;
-        approvedBudgetsValueCents += orcamento.total_cents || leadValue;
-        pendingReceivedValueCents += orcamento.saldo_restante_cents || 0;
-      }
+      // 3. Saldo a Receber: o que resta a pagar dos aprovados
+      const saldoPendente = Math.max(0, leadValue - pago);
+      pendingReceivedValueCents += saldoPendente;
+    } else if (lead.status === "open" && !lead.closed_at) {
+      // 4. Pipeline em Negociação (em aberto no funil, ainda não aprovado nem perdido)
+      totalOpenValueCents += leadValue;
     }
   });
 
@@ -442,21 +447,45 @@ export async function GET(req: NextRequest): Promise<Response> {
     const custom = (lead.custom_fields ?? {}) as Record<string, unknown>;
     const orcamento = custom.orcamento as OrcamentoLead | undefined;
 
-    // Relatórios de Orçamento
-    if (orcamento) {
-      const item = toReportItem(lead, orcamento);
-      if (orcamento.status === "aprovado" || orcamento.status === "quitado") {
-        approvedBudgetsList.push(item);
-      }
-      if ((orcamento.total_pago_cents ?? 0) > 0) {
+    // Relatórios de Orçamento & Vendas
+    const leadVal =
+      orcamento?.total_cents !== undefined && orcamento.total_cents > 0
+        ? orcamento.total_cents
+        : typeof lead.value_cents === "number"
+          ? lead.value_cents
+          : 0;
+
+    const isApprovedOrWon =
+      orcamento?.status === "aprovado" ||
+      orcamento?.status === "quitado" ||
+      lead.status === "won";
+
+    if (isApprovedOrWon) {
+      const item: OrcamentoReportItem = orcamento
+        ? toReportItem(lead, orcamento)
+        : {
+            lead_id: lead.id,
+            lead_title: lead.title,
+            contact_name: lead.contact_id ? allContactNames.get(lead.contact_id) ?? null : null,
+            stage_name: lead.stage_id && stageMap.has(lead.stage_id) ? stageMap.get(lead.stage_id)!.name : "Etapa inicial",
+            total_cents: leadVal,
+            total_pago_cents: 0,
+            saldo_restante_cents: leadVal,
+            status: "aprovado",
+            aprovado_em: lead.closed_at || lead.created_at,
+            procedimentos: [],
+            pagamentos: [],
+          };
+
+      approvedBudgetsList.push(item);
+      if (item.total_pago_cents > 0) {
         receivedPaymentsList.push(item);
       }
-      if (
-        (orcamento.status === "aprovado" || orcamento.status === "quitado") &&
-        (orcamento.saldo_restante_cents ?? 0) > 0
-      ) {
+      if (item.saldo_restante_cents > 0) {
         pendingBalanceList.push(item);
       }
+    } else if (orcamento && (orcamento.total_pago_cents ?? 0) > 0) {
+      receivedPaymentsList.push(toReportItem(lead, orcamento));
     }
 
     // Processamento de Agendamentos & Presença
